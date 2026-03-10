@@ -111,7 +111,7 @@ function updateAutoloadEntry(projectFilePath: string, name: string, newPath?: st
 export const projectToolDefinitions: ToolDefinition[] = [
   {
     name: 'launch_editor',
-    description: 'Launch Godot editor for a specific project',
+    description: 'Open the Godot editor GUI for a project. The editor is a display application — it cannot be controlled programmatically and returns immediately. For headless project modification, use manage_scene and manage_node instead.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -125,7 +125,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'run_project',
-    description: 'Run the Godot project and capture output',
+    description: 'Run a Godot project in debug mode. Required before calling take_screenshot, simulate_input, get_ui_elements, run_script, or get_debug_output. After starting, wait 2–3 seconds for the MCP bridge to initialize before using those tools. Call stop_project when done.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -135,7 +135,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
         },
         scene: {
           type: 'string',
-          description: 'Optional: Specific scene to run',
+          description: 'Scene to run (path relative to project, e.g. "scenes/main.tscn"). Omit to use the project\'s main scene.',
         },
       },
       required: ['projectPath'],
@@ -143,7 +143,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_debug_output',
-    description: 'Get the current debug output and errors',
+    description: 'Get stdout/stderr output from the running Godot project. Requires run_project first. Returns the last N lines of output and errors, a running flag, and an exit code if the process has ended. Use this to check GDScript errors, print() calls, and crash messages.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -157,7 +157,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'stop_project',
-    description: 'Stop the currently running Godot project',
+    description: 'Stop the running Godot project and clean up the MCP bridge. Always call this when done with runtime testing — even if the game crashed — to free the process slot so run_project can be called again.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -198,7 +198,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'take_screenshot',
-    description: 'Capture a PNG screenshot of the running Godot project viewport. Requires run_project first.',
+    description: 'Capture a PNG screenshot of the running Godot viewport. Requires run_project first; wait 2–3 seconds after starting for the bridge to initialize. Returns the image inline. Screenshots are also saved to .mcp/screenshots/ in the project directory.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -212,13 +212,13 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'simulate_input',
-    description: 'Simulate input in a running Godot project. Supports batched sequential actions with delays. Requires run_project first.\n\nTypes: key, mouse_button, mouse_motion, click_element, action, wait',
+    description: 'Simulate batched sequential input in a running Godot project. Requires run_project first; wait 2–3 seconds after starting. Use get_ui_elements first to discover element names for click_element actions.\n\nEach action object requires a "type" field. Valid types and their specific fields:\n- key: keyboard event (key: string, pressed: bool, shift/ctrl/alt: bool)\n- mouse_button: click at coordinates (x, y: number, button: "left"|"right"|"middle", pressed: bool, double_click: bool)\n- mouse_motion: move cursor (x, y: number, relative_x, relative_y: number)\n- click_element: click a UI element by node path, name, or visible text (element: string, button, double_click)\n- action: fire a Godot input action (action: string, pressed: bool, strength: 0–1)\n- wait: pause between actions (ms: number)',
     inputSchema: {
       type: 'object',
       properties: {
         actions: {
           type: 'array',
-          description: 'Array of input actions to execute sequentially',
+          description: 'Array of input actions to execute sequentially. Each object must have a "type" field.',
           items: {
             type: 'object',
             properties: {
@@ -228,20 +228,20 @@ export const projectToolDefinitions: ToolDefinition[] = [
                 description: 'The type of input action',
               },
               key: { type: 'string', description: '[key] Key name (e.g. "W", "Space", "Escape", "Up")' },
-              pressed: { type: 'boolean', description: 'Whether the input is pressed (true) or released (false)' },
+              pressed: { type: 'boolean', description: '[key, mouse_button, action] Whether the input is pressed (true) or released (false)' },
               shift: { type: 'boolean', description: '[key] Shift modifier' },
               ctrl: { type: 'boolean', description: '[key] Ctrl modifier' },
               alt: { type: 'boolean', description: '[key] Alt modifier' },
               button: { type: 'string', enum: ['left', 'right', 'middle'], description: '[mouse_button, click_element] Mouse button (default: left)' },
-              x: { type: 'number', description: '[mouse_button, mouse_motion] X position' },
-              y: { type: 'number', description: '[mouse_button, mouse_motion] Y position' },
-              relative_x: { type: 'number', description: '[mouse_motion] Relative X movement' },
-              relative_y: { type: 'number', description: '[mouse_motion] Relative Y movement' },
+              x: { type: 'number', description: '[mouse_button, mouse_motion] X position in viewport pixels' },
+              y: { type: 'number', description: '[mouse_button, mouse_motion] Y position in viewport pixels' },
+              relative_x: { type: 'number', description: '[mouse_motion] Relative X movement in pixels' },
+              relative_y: { type: 'number', description: '[mouse_motion] Relative Y movement in pixels' },
               double_click: { type: 'boolean', description: '[mouse_button, click_element] Double click' },
-              element: { type: 'string', description: '[click_element] Node name or node path of the UI element to click. Use get_ui_elements to discover node names.' },
-              action: { type: 'string', description: '[action] Godot input action name' },
-              strength: { type: 'number', description: '[action] Action strength (0-1, default 1.0)' },
-              ms: { type: 'number', description: '[wait] Duration in milliseconds' },
+              element: { type: 'string', description: '[click_element] Identifies the UI element to click. Accepts: node path (e.g. "root/HUD/Button"), node name, or visible text label. Use get_ui_elements to discover valid values.' },
+              action: { type: 'string', description: '[action] Godot input action name (as defined in Project Settings > Input Map)' },
+              strength: { type: 'number', description: '[action] Action strength (0–1, default 1.0)' },
+              ms: { type: 'number', description: '[wait] Duration in milliseconds to pause before the next action' },
             },
             required: ['type'],
           },
@@ -252,17 +252,17 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_ui_elements',
-    description: 'Get visible Control UI elements from a running project with positions, types, and text. Use before click_element. Requires run_project first.',
+    description: 'Get Control nodes from a running Godot project with their positions, sizes, types, and text. Requires run_project first; wait 2–3 seconds after starting. Call this before simulate_input with click_element to discover valid element names. Returns: { elements: [{ node_path, node_name, type, text, position, size }] }',
     inputSchema: {
       type: 'object',
       properties: {
         visibleOnly: {
           type: 'boolean',
-          description: 'Only return visible elements (default: true)',
+          description: 'Only return nodes where Control.visible is true (default: true). Set false to include hidden elements.',
         },
         filter: {
           type: 'string',
-          description: 'Filter by Control type (e.g. "Button", "Label")',
+          description: 'Filter by Control node type (e.g. "Button", "Label", "LineEdit")',
         },
       },
       required: [],
@@ -270,17 +270,17 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'run_script',
-    description: 'Execute a custom GDScript in the running Godot project. Script must define: extends RefCounted and func execute(scene_tree: SceneTree) -> Variant. Has full access to the live scene tree. Requires run_project first.',
+    description: 'Execute a custom GDScript in the live running project with full scene tree access. Requires run_project first. Script must extend RefCounted and define func execute(scene_tree: SceneTree) -> Variant. Return values are JSON-serialized (primitives, Vector2/3, Color, Dictionary, Array, and Node path strings are supported). Use print() for debug output — it appears in get_debug_output, not in the script result.',
     inputSchema: {
       type: 'object',
       properties: {
         script: {
           type: 'string',
-          description: 'GDScript source code. Must extend RefCounted and have execute(scene_tree: SceneTree) -> Variant.',
+          description: 'GDScript source code. Must contain "extends RefCounted" and "func execute(scene_tree: SceneTree) -> Variant".',
         },
         timeout: {
           type: 'number',
-          description: 'Timeout in ms (default: 30000)',
+          description: 'Timeout in ms (default: 30000). Increase for long-running scripts.',
         },
       },
       required: ['script'],
@@ -476,7 +476,7 @@ export async function handleLaunchEditor(runner: GodotRunner, args: OperationPar
     });
 
     return {
-      content: [{ type: 'text', text: `Godot editor launched successfully for project at ${args.projectPath}.` }],
+      content: [{ type: 'text', text: `Godot editor launched successfully for project at ${args.projectPath}.\nNote: the editor is a GUI application and cannot be controlled programmatically. Use manage_scene and manage_node to modify the project headlessly without the editor.` }],
     };
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -516,7 +516,12 @@ export async function handleRunProject(runner: GodotRunner, args: OperationParam
     runner.runProject(args.projectPath as string, args.scene as string | undefined);
 
     return {
-      content: [{ type: 'text', text: 'Godot project started in debug mode. Use get_debug_output to see output.' }],
+      content: [{ type: 'text', text: [
+        'Godot project started in debug mode.',
+        '- Use get_debug_output to check runtime output and errors',
+        '- Wait 2–3 seconds before calling take_screenshot, simulate_input, get_ui_elements, or run_script (bridge needs time to initialize)',
+        '- Always call stop_project when done — it terminates the process and cleans up the MCP bridge',
+      ].join('\n') }],
     };
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -552,6 +557,8 @@ export function handleGetDebugOutput(runner: GodotRunner, args: OperationParams 
 
   if (proc.hasExited) {
     response.exitCode = proc.exitCode;
+    (response as typeof response & { tip: string }).tip =
+      'Process has exited. Call stop_project to clean up the process slot before starting a new one.';
   }
 
   return {
@@ -817,6 +824,7 @@ export async function handleSimulateInput(runner: GodotRunner, args: OperationPa
         text: JSON.stringify({
           success: true,
           actions_processed: parsed.actions_processed,
+          tip: 'Call take_screenshot to verify the input had the intended visual effect.',
         }),
       }],
     };
@@ -870,7 +878,10 @@ export async function handleGetUiElements(runner: GodotRunner, args: OperationPa
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(parsed),
+        text: JSON.stringify({
+          ...parsed,
+          tip: "Use simulate_input with type 'click_element' and a node_path or text value from this list to interact with these elements.",
+        }),
       }],
     };
   } catch (error: unknown) {
@@ -951,7 +962,11 @@ export async function handleRunScript(runner: GodotRunner, args: OperationParams
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify({ success: true, result: parsed.result }),
+        text: JSON.stringify({
+          success: true,
+          result: parsed.result,
+          tip: 'Call take_screenshot to verify any visual changes, or get_debug_output to review print() output from your script.',
+        }),
       }],
     };
   } catch (error: unknown) {
@@ -1019,7 +1034,7 @@ export async function handleManageProject(args: OperationParams) {
         const isSingleton = args.singleton !== false;
         addAutoloadEntry(projectFile, args.autoloadName as string, args.autoloadPath as string, isSingleton);
         return {
-          content: [{ type: 'text', text: `Autoload '${args.autoloadName}' registered at '${args.autoloadPath}' (singleton: ${isSingleton}).` }],
+          content: [{ type: 'text', text: `Autoload '${args.autoloadName}' registered at '${args.autoloadPath}' (singleton: ${isSingleton}).\nWarning: autoloads initialize in headless mode too. If this script has errors or missing dependencies, all manage_scene and manage_node operations will fail with a cryptic crash. Verify by running a simple manage_node get_tree operation — if it fails, use manage_project remove_autoload to remove it.` }],
         };
       }
 

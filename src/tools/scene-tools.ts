@@ -12,7 +12,7 @@ import {
 export const sceneToolDefinitions: ToolDefinition[] = [
   {
     name: 'manage_scene',
-    description: 'Manage Godot scene files. Operations:\n- create: Create new scene (optional: rootNodeType, default Node2D)\n- add_node: Add node to scene (required: nodeType, nodeName; optional: parentNodePath, properties)\n- load_sprite: Load texture into Sprite2D (required: nodePath, texturePath)\n- save: Save scene file (optional: newPath for save-as)\n- export_mesh_library: Export as MeshLibrary (required: outputPath; optional: meshItemNames)',
+    description: 'Manage Godot scene files using headless Godot. Important: create, add_node, and load_sprite modify an in-memory scene — always follow them with operation "save" to persist changes to disk.\n\nOperations:\n- create: Create a new scene file (optional: rootNodeType, default Node2D)\n- add_node: Add a node to the scene (required: nodeType, nodeName; optional: parentNodePath, properties)\n- load_sprite: Set the texture on a Sprite2D, Sprite3D, or TextureRect node (required: nodePath, texturePath)\n- save: Write the scene to disk (optional: newPath for save-as)\n- export_mesh_library: Export scene as a MeshLibrary .res file (required: outputPath; optional: meshItemNames)',
     inputSchema: {
       type: 'object',
       properties: {
@@ -27,7 +27,7 @@ export const sceneToolDefinitions: ToolDefinition[] = [
         },
         scenePath: {
           type: 'string',
-          description: 'Scene file path (relative to project, e.g. "scenes/main.tscn")',
+          description: 'Scene file path relative to the project (e.g. "scenes/main.tscn")',
         },
         rootNodeType: {
           type: 'string',
@@ -35,40 +35,40 @@ export const sceneToolDefinitions: ToolDefinition[] = [
         },
         nodeType: {
           type: 'string',
-          description: '[add_node] Type of node to add (e.g. Sprite2D, CollisionShape2D)',
+          description: '[add_node] Godot node class to instantiate (e.g. "Sprite2D", "CollisionShape2D", "Label")',
         },
         nodeName: {
           type: 'string',
-          description: '[add_node] Name for the new node',
+          description: '[add_node] Name for the new node as it appears in the scene tree',
         },
         parentNodePath: {
           type: 'string',
-          description: '[add_node] Parent node path (default: root)',
+          description: '[add_node] Parent node path from scene root (e.g. "root/Player"). Defaults to the root node.',
         },
         properties: {
           type: 'object',
-          description: '[add_node] Properties to set on the node',
+          description: '[add_node] Initial property values as a JSON object (e.g. {"position": {"x": 100, "y": 200}}). Supports primitives and nested objects for Vector2/Color.',
         },
         nodePath: {
           type: 'string',
-          description: '[load_sprite] Path to the Sprite2D node',
+          description: '[load_sprite] Path to the target node from scene root (e.g. "root/Player/Sprite2D")',
         },
         texturePath: {
           type: 'string',
-          description: '[load_sprite] Path to the texture file (relative to project)',
+          description: '[load_sprite] Path to the texture file relative to the project (e.g. "assets/player.png")',
         },
         newPath: {
           type: 'string',
-          description: '[save] New path to save as (for creating variants)',
+          description: '[save] Save to a different path (relative to project) instead of overwriting the original',
         },
         outputPath: {
           type: 'string',
-          description: '[export_mesh_library] Output path for the MeshLibrary .res file',
+          description: '[export_mesh_library] Output path for the MeshLibrary .res file (relative to project)',
         },
         meshItemNames: {
           type: 'array',
           items: { type: 'string' },
-          description: '[export_mesh_library] Names of specific mesh items to include',
+          description: '[export_mesh_library] Names of specific mesh items to export. Omit to export all.',
         },
       },
       required: ['operation', 'projectPath', 'scenePath'],
@@ -76,7 +76,7 @@ export const sceneToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'manage_uids',
-    description: 'Manage UIDs in a Godot 4.4+ project. Operations:\n- get: Get UID for a file (required: filePath)\n- update: Resave all resources to update UID references',
+    description: 'Manage resource UIDs in a Godot 4.4+ project. Requires Godot 4.4 or later — will error on older versions. UIDs are stable identifiers that let resources reference each other across renames and moves.\n\nOperations:\n- get: Get the UID string for a specific file (required: filePath)\n- update: Resave all project resources to regenerate UID references (use after reorganizing files)',
     inputSchema: {
       type: 'object',
       properties: {
@@ -91,7 +91,7 @@ export const sceneToolDefinitions: ToolDefinition[] = [
         },
         filePath: {
           type: 'string',
-          description: '[get] Path to the file (relative to project)',
+          description: '[get] Path to the file relative to the project (e.g. "scenes/player.tscn")',
         },
       },
       required: ['operation', 'projectPath'],
@@ -145,7 +145,10 @@ export async function handleManageScene(runner: GodotRunner, args: OperationPara
         if (stderr && stderr.includes('Failed to')) {
           return createErrorResponse(`Failed to create scene: ${stderr}`, ['Check if the root node type is valid']);
         }
-        return { content: [{ type: 'text', text: stdout }] };
+        return { content: [
+          { type: 'text', text: stdout },
+          { type: 'text', text: 'Call manage_scene with operation "save" to persist this scene to disk.' },
+        ] };
       }
 
       case 'add_node': {
@@ -163,7 +166,10 @@ export async function handleManageScene(runner: GodotRunner, args: OperationPara
         if (stderr && stderr.includes('Failed to')) {
           return createErrorResponse(`Failed to add node: ${stderr}`, ['Check if the node type is valid', 'Ensure the parent node path exists']);
         }
-        return { content: [{ type: 'text', text: stdout }] };
+        return { content: [
+          { type: 'text', text: stdout },
+          { type: 'text', text: 'Call manage_scene with operation "save" to persist this change to disk.' },
+        ] };
       }
 
       case 'load_sprite': {
@@ -186,7 +192,10 @@ export async function handleManageScene(runner: GodotRunner, args: OperationPara
         if (stderr && stderr.includes('Failed to')) {
           return createErrorResponse(`Failed to load sprite: ${stderr}`, ['Check if the node is a Sprite2D, Sprite3D, or TextureRect']);
         }
-        return { content: [{ type: 'text', text: stdout }] };
+        return { content: [
+          { type: 'text', text: stdout },
+          { type: 'text', text: 'Call manage_scene with operation "save" to persist this change to disk.' },
+        ] };
       }
 
       case 'save': {

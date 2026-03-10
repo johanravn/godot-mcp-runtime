@@ -108,6 +108,8 @@ Ask your AI assistant to call `get_project_info`. If it returns a Godot version 
 
 ### Runtime (requires `run_project` first)
 
+After calling `run_project`, wait 2–3 seconds for the MCP bridge to initialize before using these tools.
+
 | Tool | Description |
 |------|-------------|
 | `take_screenshot` | Capture a PNG of the running viewport |
@@ -117,12 +119,14 @@ Ask your AI assistant to call `get_project_info`. If it returns a Godot version 
 
 ### Scene: `manage_scene`
 
+`create`, `add_node`, and `load_sprite` modify an in-memory scene. Always follow them with `save` to write changes to disk.
+
 | Operation | Description |
 |-----------|-------------|
 | `create` | Create a new scene file |
 | `add_node` | Add a node to an existing scene |
 | `load_sprite` | Set a texture on a Sprite2D, Sprite3D, or TextureRect |
-| `save` | Save a scene, or save-as with `newPath` |
+| `save` | Write the scene to disk (or save-as with `newPath`) |
 | `export_mesh_library` | Export scenes as a MeshLibrary for GridMap |
 
 ### Project Settings: `manage_project`
@@ -145,13 +149,15 @@ Edits `project.godot` directly — no Godot process required. Safe to use even w
 
 ### Node: `manage_node`
 
+`delete`, `update_property`, and `attach_script` modify an in-memory scene. Always follow them with `manage_scene` → `save` to persist.
+
 | Operation | Description |
 |-----------|-------------|
 | `delete` | Remove a node from a scene |
 | `update_property` | Set a property on a node |
 | `get_properties` | Read node properties |
 | `attach_script` | Attach a GDScript to a node |
-| `list` | List child nodes |
+| `list` | List direct child nodes |
 | `get_tree` | Get the full scene tree hierarchy |
 
 ## Architecture

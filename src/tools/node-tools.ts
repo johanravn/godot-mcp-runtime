@@ -12,7 +12,7 @@ import {
 export const nodeToolDefinitions: ToolDefinition[] = [
   {
     name: 'manage_node',
-    description: 'Manage nodes within a Godot scene. Operations:\n- delete: Remove a node (required: nodePath)\n- update_property: Set a property value (required: nodePath, property, value)\n- get_properties: Get all properties of a node (required: nodePath)\n- attach_script: Attach/change a script on a node (required: nodePath, scriptPath)\n- list: List child nodes (optional: parentPath)\n- get_tree: Get full hierarchical tree (optional: parentPath to scope)',
+    description: 'Read or modify nodes in a Godot scene file using headless Godot. Important: delete, update_property, and attach_script modify an in-memory scene — always call manage_scene with operation "save" afterward to persist.\n\nOperations:\n- delete: Remove a node from the scene (required: nodePath)\n- update_property: Set a property on a node (required: nodePath, property, value)\n- get_properties: Read a node\'s current property values (required: nodePath; optional: changedOnly)\n- attach_script: Attach a GDScript file to a node (required: nodePath, scriptPath)\n- list: List direct child node names and types (optional: parentPath)\n- get_tree: Get the full scene hierarchy as a tree structure (optional: parentPath, maxDepth)',
     inputSchema: {
       type: 'object',
       properties: {
@@ -27,34 +27,34 @@ export const nodeToolDefinitions: ToolDefinition[] = [
         },
         scenePath: {
           type: 'string',
-          description: 'Path to the scene file (relative to project)',
+          description: 'Path to the scene file relative to the project (e.g. "scenes/main.tscn")',
         },
         nodePath: {
           type: 'string',
-          description: 'Node path within scene (e.g. "root/Player/Sprite2D"). Required for delete, update_property, get_properties, attach_script.',
+          description: 'Node path from scene root (e.g. "root/Player/Sprite2D"). Required for delete, update_property, get_properties, attach_script.',
         },
         property: {
           type: 'string',
-          description: '[update_property] Name of the property to update',
+          description: '[update_property] GDScript property name in snake_case (e.g. "position", "modulate", "collision_layer"). Use get_properties to discover valid property names.',
         },
         value: {
-          description: '[update_property] New value for the property (any type)',
+          description: '[update_property] New property value. Use JSON-compatible types: string, number, boolean, array, or object. For complex GDScript types (Vector2, Color, etc.), use run_script instead.',
         },
         scriptPath: {
           type: 'string',
-          description: '[attach_script] Path to the GDScript file (relative to project)',
+          description: '[attach_script] Path to the GDScript file relative to the project (e.g. "scripts/player.gd")',
         },
         parentPath: {
           type: 'string',
-          description: '[list, get_tree] Parent node path to scope results (default: root)',
+          description: '[list, get_tree] Scope results to this node path from scene root (e.g. "root/Player"). Defaults to the root node.',
         },
         changedOnly: {
           type: 'boolean',
-          description: '[get_properties] Only return properties that differ from defaults (default: false)',
+          description: '[get_properties] Only return properties whose values differ from their class defaults (default: false)',
         },
         maxDepth: {
           type: 'number',
-          description: '[get_tree] Max depth to recurse (-1 for unlimited, default: -1)',
+          description: '[get_tree] Maximum recursion depth. -1 for unlimited (default: -1). 1 returns only direct children.',
         },
       },
       required: ['operation', 'projectPath', 'scenePath'],
@@ -113,7 +113,10 @@ export async function handleManageNode(runner: GodotRunner, args: OperationParam
         if (stderr && stderr.includes('Failed to')) {
           return createErrorResponse(`Failed to delete node: ${stderr}`, ['Check if the node path is correct']);
         }
-        return { content: [{ type: 'text', text: stdout }] };
+        return { content: [
+          { type: 'text', text: stdout },
+          { type: 'text', text: 'Call manage_scene with operation "save" to persist this change to disk.' },
+        ] };
       }
 
       case 'update_property': {
@@ -130,7 +133,10 @@ export async function handleManageNode(runner: GodotRunner, args: OperationParam
         if (stderr && stderr.includes('Failed to')) {
           return createErrorResponse(`Failed to update property: ${stderr}`, ['Check if the property name is valid for this node type']);
         }
-        return { content: [{ type: 'text', text: stdout }] };
+        return { content: [
+          { type: 'text', text: stdout },
+          { type: 'text', text: 'Call manage_scene with operation "save" to persist this change to disk.' },
+        ] };
       }
 
       case 'get_properties': {
@@ -163,7 +169,10 @@ export async function handleManageNode(runner: GodotRunner, args: OperationParam
         if (stderr && stderr.includes('Failed to')) {
           return createErrorResponse(`Failed to attach script: ${stderr}`, ['Ensure the script is valid for this node type']);
         }
-        return { content: [{ type: 'text', text: stdout }] };
+        return { content: [
+          { type: 'text', text: stdout },
+          { type: 'text', text: 'Call manage_scene with operation "save" to persist this change to disk.' },
+        ] };
       }
 
       case 'list': {
