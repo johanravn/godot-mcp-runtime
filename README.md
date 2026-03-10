@@ -11,15 +11,15 @@ Most Godot MCP servers operate headlessly. They can create scenes, add nodes, at
 
 **The distinction matters: the AI doesn't just write your game, it can check its work.**
 
+<a href="https://glama.ai/mcp/servers/@Erodenn/godot-runtime-mcp">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@Erodenn/godot-runtime-mcp/badge" alt="godot-runtime-mcp MCP server" />
+</a>
+
 Think of it as [Playwright MCP](https://github.com/microsoft/playwright-mcp), but for Godot. Playwright lets agents verify that a web app actually works by driving a real browser. This does the same thing for games: run the project, take a screenshot, simulate input, read what's on screen, execute a script against the live scene tree. The agent closes the loop on its own changes rather than handing off to you to verify.
 
 This is not a playtesting replacement. It doesn't catch the subtle feel issues that only a human notices, and it won't tell you if your game is fun. What it does is let an agent confirm that a scene loads, a button responds, a value updated, a script ran without errors. That's a fundamentally different development workflow, and it's what this server is built for.
 
 This server is built around a small set of composable, wide-reaching tools rather than a long list of narrow ones. Each tool is designed to teach agents how to use it well. Response messages include next steps, timing constraints, and cleanup reminders so agents stay on track without extra prompting.
-
-<a href="https://glama.ai/mcp/servers/@Erodenn/godot-runtime-mcp">
-  <img width="380" height="200" src="https://glama.ai/mcp/servers/@Erodenn/godot-runtime-mcp/badge" alt="Godot MCP Server on Glama" />
-</a>
 
 ## What It Does
 
