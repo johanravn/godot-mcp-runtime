@@ -88,6 +88,15 @@ func _init():
 			disconnect_node_signal(params)
 		"validate_resource":
 			validate_resource(params)
+		# Batch operations
+		"validate_batch":
+			validate_batch(params)
+		"batch_scene_operations":
+			batch_scene_operations(params)
+		"batch_update_node_properties":
+			batch_update_node_properties(params)
+		"batch_get_node_properties":
+			batch_get_node_properties(params)
 		_:
 			log_error("Unknown operation: " + operation)
 			quit(1)
@@ -574,21 +583,9 @@ func update_node_property(params):
 		quit(1)
 
 	var property_name = params.property
-	var property_value = params.value
+	var property_value = _coerce_property_value(params.value)
 
 	log_debug("Setting property '" + property_name + "' to: " + str(property_value))
-
-	# Handle special value types
-	if typeof(property_value) == TYPE_DICTIONARY:
-		# Check if it's a Vector2, Vector3, Color, etc.
-		if property_value.has("x") and property_value.has("y"):
-			if property_value.has("z"):
-				property_value = Vector3(property_value.x, property_value.y, property_value.z)
-			else:
-				property_value = Vector2(property_value.x, property_value.y)
-		elif property_value.has("r") and property_value.has("g") and property_value.has("b"):
-			var a = property_value.a if property_value.has("a") else 1.0
-			property_value = Color(property_value.r, property_value.g, property_value.b, a)
 
 	node.set(property_name, property_value)
 
@@ -612,49 +609,7 @@ func get_node_properties(params):
 		quit(1)
 
 	var changed_only = params.has("changed_only") and params.changed_only
-
-	var default_node = null
-	if changed_only:
-		default_node = instantiate_class(node.get_class())
-
-	var properties = {}
-	var property_list = node.get_property_list()
-
-	for prop in property_list:
-		var prop_name = prop["name"]
-		var prop_usage = prop["usage"]
-
-		# Only include properties that are stored/visible
-		if prop_usage & PROPERTY_USAGE_STORAGE or prop_usage & PROPERTY_USAGE_EDITOR:
-			var value = node.get(prop_name)
-
-			# Skip properties matching defaults if changed_only
-			if default_node and default_node.get(prop_name) == value:
-				continue
-
-			# Convert special types to serializable format
-			if value is Vector2:
-				properties[prop_name] = {"x": value.x, "y": value.y}
-			elif value is Vector3:
-				properties[prop_name] = {"x": value.x, "y": value.y, "z": value.z}
-			elif value is Color:
-				properties[prop_name] = {"r": value.r, "g": value.g, "b": value.b, "a": value.a}
-			elif value is Transform2D:
-				properties[prop_name] = str(value)
-			elif value is Transform3D:
-				properties[prop_name] = str(value)
-			elif value is Object:
-				if value:
-					properties[prop_name] = value.get_class()
-				else:
-					properties[prop_name] = null
-			elif typeof(value) in [TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_ARRAY, TYPE_DICTIONARY]:
-				properties[prop_name] = value
-			else:
-				properties[prop_name] = str(value)
-
-	if default_node:
-		default_node.free()
+	var properties = _collect_node_properties(node, changed_only)
 
 	var result = {
 		"nodePath": params.node_path,
@@ -911,27 +866,249 @@ func disconnect_node_signal(params):
 
 # Validate a GDScript or scene file by loading it headlessly
 func validate_resource(params):
-	if params.has("script_path"):
-		var path = normalize_scene_path(params.script_path)
-		if not FileAccess.file_exists(path):
-			print(JSON.stringify({"valid": false, "errors": [{"message": "File not found: " + path}]}))
-			return
-		var resource = load(path)
-		if resource:
-			print(JSON.stringify({"valid": true, "errors": []}))
-		else:
-			print(JSON.stringify({"valid": false, "errors": []}))
-			# Actual error details will be in stderr, parsed by TypeScript
-	elif params.has("scene_path"):
-		var path = normalize_scene_path(params.scene_path)
-		if not FileAccess.file_exists(path):
-			print(JSON.stringify({"valid": false, "errors": [{"message": "File not found: " + path}]}))
-			return
-		var scene = load(path)
-		if scene:
-			print(JSON.stringify({"valid": true, "errors": []}))
-		else:
-			print(JSON.stringify({"valid": false, "errors": []}))
-	else:
+	if not (params.has("script_path") or params.has("scene_path")):
 		log_error("validate_resource requires script_path or scene_path")
 		quit(1)
+	var result = _validate_single(params)
+	print(JSON.stringify({"valid": result.valid, "errors": result.errors}))
+
+# ============================================
+# BATCH OPERATIONS
+# ============================================
+
+# Helper: coerce a JSON-parsed value to a GDScript type (Vector2, Vector3, Color)
+func _coerce_property_value(value):
+	if typeof(value) == TYPE_DICTIONARY:
+		if value.has("x") and value.has("y"):
+			if value.has("z"):
+				return Vector3(value.x, value.y, value.z)
+			else:
+				return Vector2(value.x, value.y)
+		elif value.has("r") and value.has("g") and value.has("b"):
+			var a = value.a if value.has("a") else 1.0
+			return Color(value.r, value.g, value.b, a)
+	return value
+
+# Helper: collect node properties into a serializable Dictionary
+func _collect_node_properties(node: Node, changed_only: bool) -> Dictionary:
+	var default_node = null
+	if changed_only:
+		default_node = instantiate_class(node.get_class())
+
+	var properties = {}
+	var property_list = node.get_property_list()
+
+	for prop in property_list:
+		var prop_name = prop["name"]
+		var prop_usage = prop["usage"]
+
+		if prop_usage & PROPERTY_USAGE_STORAGE or prop_usage & PROPERTY_USAGE_EDITOR:
+			var value = node.get(prop_name)
+
+			if default_node and default_node.get(prop_name) == value:
+				continue
+
+			if value is Vector2:
+				properties[prop_name] = {"x": value.x, "y": value.y}
+			elif value is Vector3:
+				properties[prop_name] = {"x": value.x, "y": value.y, "z": value.z}
+			elif value is Color:
+				properties[prop_name] = {"r": value.r, "g": value.g, "b": value.b, "a": value.a}
+			elif value is Transform2D:
+				properties[prop_name] = str(value)
+			elif value is Transform3D:
+				properties[prop_name] = str(value)
+			elif value is Object:
+				if value:
+					properties[prop_name] = value.get_class()
+				else:
+					properties[prop_name] = null
+			elif typeof(value) in [TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_ARRAY, TYPE_DICTIONARY]:
+				properties[prop_name] = value
+			else:
+				properties[prop_name] = str(value)
+
+	if default_node:
+		default_node.free()
+
+	return properties
+
+# Helper: validate a single target dict (script_path or scene_path)
+func _validate_single(target: Dictionary) -> Dictionary:
+	if target.has("script_path") and target.script_path != "":
+		var path = normalize_scene_path(target.script_path)
+		if not FileAccess.file_exists(path):
+			return {"valid": false, "errors": [{"message": "File not found: " + path}], "target": target.script_path}
+		var resource = load(path)
+		# Actual parse errors go to stderr and are parsed by TypeScript
+		return {"valid": resource != null, "errors": [], "target": target.script_path}
+	elif target.has("scene_path") and target.scene_path != "":
+		var path = normalize_scene_path(target.scene_path)
+		if not FileAccess.file_exists(path):
+			return {"valid": false, "errors": [{"message": "File not found: " + path}], "target": target.scene_path}
+		var scene = load(path)
+		return {"valid": scene != null, "errors": [], "target": target.scene_path}
+	else:
+		return {"valid": false, "errors": [{"message": "No valid target: provide script_path or scene_path"}], "target": ""}
+
+# Validate multiple scripts/scenes in a single headless process
+func validate_batch(params: Dictionary) -> void:
+	var results: Array = []
+	for target in params.targets:
+		results.append(_validate_single(target))
+	print(JSON.stringify({"results": results}))
+
+# Helper: add a node to a scene root without saving (returns error string or "")
+func _batch_add_node(scene_root: Node, op: Dictionary) -> String:
+	var parent_path = "root"
+	if op.has("parent_node_path"):
+		parent_path = op.parent_node_path
+	var parent = find_node_by_path(scene_root, parent_path)
+	if not parent:
+		return "Parent node not found: " + parent_path
+	if not op.has("node_type") or op.node_type == "":
+		return "node_type is required for add_node"
+	if not op.has("node_name") or op.node_name == "":
+		return "node_name is required for add_node"
+	var new_node = instantiate_class(op.node_type)
+	if not new_node:
+		return "Failed to instantiate node of type: " + op.node_type
+	new_node.name = op.node_name
+	if op.has("properties"):
+		for property in op.properties:
+			new_node.set(property, op.properties[property])
+	parent.add_child(new_node)
+	new_node.owner = scene_root
+	return ""
+
+# Helper: set a sprite texture without saving (returns error string or "")
+func _batch_load_sprite(scene_root: Node, op: Dictionary) -> String:
+	if not op.has("node_path") or op.node_path == "":
+		return "node_path is required for load_sprite"
+	if not op.has("texture_path") or op.texture_path == "":
+		return "texture_path is required for load_sprite"
+	var sprite_node = find_node_by_path(scene_root, op.node_path)
+	if not sprite_node:
+		return "Node not found: " + op.node_path
+	if not (sprite_node is Sprite2D or sprite_node is Sprite3D or sprite_node is TextureRect):
+		return "Node is not sprite-compatible: " + sprite_node.get_class()
+	var texture = load(normalize_scene_path(op.texture_path))
+	if not texture:
+		return "Failed to load texture: " + op.texture_path
+	sprite_node.texture = texture
+	return ""
+
+# Execute multiple scene operations in a single headless process
+# Scenes are loaded once and cached in memory; mutations accumulate until a save op
+func batch_scene_operations(params: Dictionary) -> void:
+	var abort_on_error = params.get("abort_on_error", false)
+	var results: Array = []
+	var scene_cache: Dictionary = {}
+
+	for op in params.operations:
+		var op_name = op.get("operation", "")
+		var scene_path = op.get("scene_path", "")
+		var result = {"operation": op_name, "scenePath": scene_path}
+
+		if scene_path != "" and scene_path not in scene_cache:
+			var scene_root = load_scene_instance(scene_path)
+			if scene_root:
+				scene_cache[scene_path] = scene_root
+			else:
+				result["error"] = "Failed to load scene: " + scene_path
+				results.append(result)
+				if abort_on_error:
+					break
+				continue
+
+		var scene_root = scene_cache.get(scene_path, null) if scene_path != "" else null
+
+		match op_name:
+			"add_node":
+				if scene_root == null:
+					result["error"] = "scene_path required for add_node"
+				else:
+					var err = _batch_add_node(scene_root, op)
+					if err != "":
+						result["error"] = err
+					else:
+						result["success"] = true
+			"load_sprite":
+				if scene_root == null:
+					result["error"] = "scene_path required for load_sprite"
+				else:
+					var err = _batch_load_sprite(scene_root, op)
+					if err != "":
+						result["error"] = err
+					else:
+						result["success"] = true
+			"save":
+				if scene_root == null:
+					result["error"] = "scene_path required for save"
+				else:
+					var new_path = op.get("new_path", scene_path)
+					if save_scene_to_path(scene_root, new_path):
+						result["success"] = true
+						scene_cache.erase(scene_path)
+					else:
+						result["error"] = "Failed to save scene: " + scene_path
+			_:
+				result["error"] = "Unknown batch operation: " + op_name
+
+		results.append(result)
+		if abort_on_error and result.has("error"):
+			break
+
+	# Auto-save any scenes that were mutated but not explicitly saved
+	for scene_path in scene_cache:
+		save_scene_to_path(scene_cache[scene_path], scene_path)
+
+	print(JSON.stringify({"results": results}))
+
+# Update multiple node properties in a single headless process (loads and saves scene once)
+func batch_update_node_properties(params: Dictionary) -> void:
+	var scene_root = load_scene_instance(params.scene_path)
+	if not scene_root:
+		print(JSON.stringify({"error": "Failed to load scene: " + params.scene_path, "results": []}))
+		return
+
+	var abort_on_error = params.get("abort_on_error", false)
+	var results: Array = []
+
+	for update in params.updates:
+		var result = {"nodePath": update.node_path, "property": update.property}
+		var node = find_node_by_path(scene_root, update.node_path)
+		if node == null:
+			result["error"] = "Node not found: " + update.node_path
+		else:
+			node.set(update.property, _coerce_property_value(update.value))
+			result["success"] = true
+		results.append(result)
+		if abort_on_error and result.has("error"):
+			break
+
+	if save_scene_to_path(scene_root, params.scene_path):
+		print(JSON.stringify({"results": results}))
+	else:
+		print(JSON.stringify({"error": "Failed to save scene after batch updates", "partial_results": results}))
+
+# Get properties from multiple nodes in a single headless process (loads scene once)
+func batch_get_node_properties(params: Dictionary) -> void:
+	var scene_root = load_scene_instance(params.scene_path)
+	if not scene_root:
+		print(JSON.stringify({"error": "Failed to load scene: " + params.scene_path, "results": []}))
+		return
+
+	var results: Array = []
+
+	for node_spec in params.nodes:
+		var node_path = node_spec.get("node_path", "")
+		var changed_only = node_spec.get("changed_only", false)
+		var node = find_node_by_path(scene_root, node_path)
+		if node == null:
+			results.append({"nodePath": node_path, "error": "Node not found"})
+		else:
+			var props = _collect_node_properties(node, changed_only)
+			results.append({"nodePath": node_path, "nodeType": node.get_class(), "properties": props})
+
+	print(JSON.stringify({"results": results}))

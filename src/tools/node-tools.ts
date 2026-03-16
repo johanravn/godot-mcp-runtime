@@ -77,6 +77,35 @@ export const nodeToolDefinitions: ToolDefinition[] = [
           type: 'string',
           description: '[connect_signal, disconnect_signal] Method name on the target node to call when the signal fires',
         },
+        updates: {
+          type: 'array',
+          description: '[update_property batch] Multiple property updates in one Godot process. Requires scenePath at top level. Returns { results: [{ nodePath, property, success?, error? }] }.',
+          items: {
+            type: 'object',
+            properties: {
+              nodePath: { type: 'string', description: 'Node path from scene root (e.g. "root/Player")' },
+              property: { type: 'string', description: 'GDScript property name in snake_case' },
+              value: { description: 'New property value' },
+            },
+            required: ['nodePath', 'property', 'value'],
+          },
+        },
+        nodes: {
+          type: 'array',
+          description: '[get_properties batch] Get properties from multiple nodes in one Godot process. Requires scenePath at top level. Returns { results: [{ nodePath, nodeType, properties?, error? }] }.',
+          items: {
+            type: 'object',
+            properties: {
+              nodePath: { type: 'string', description: 'Node path from scene root' },
+              changedOnly: { type: 'boolean', description: 'Only return properties differing from defaults (default: false)' },
+            },
+            required: ['nodePath'],
+          },
+        },
+        abortOnError: {
+          type: 'boolean',
+          description: '[update_property batch] Stop processing on first error (default: false)',
+        },
       },
       required: ['operation', 'projectPath', 'scenePath'],
     },
@@ -115,9 +144,12 @@ export async function handleManageNode(runner: GodotRunner, args: OperationParam
     );
   }
 
-  // Operations that require nodePath
+  // Operations that require nodePath (skipped when batch params are provided)
+  const isBatchOp =
+    (operation === 'update_property' && args.updates && Array.isArray(args.updates)) ||
+    (operation === 'get_properties' && args.nodes && Array.isArray(args.nodes));
   const needsNodePath = ['delete', 'update_property', 'get_properties', 'attach_script', 'duplicate', 'get_signals', 'connect_signal', 'disconnect_signal'];
-  if (needsNodePath.includes(operation)) {
+  if (needsNodePath.includes(operation) && !isBatchOp) {
     if (!args.nodePath) {
       return createErrorResponse(`nodePath is required for ${operation}`, ['Provide the node path (e.g. "root/Player")']);
     }
@@ -138,6 +170,26 @@ export async function handleManageNode(runner: GodotRunner, args: OperationParam
       }
 
       case 'update_property': {
+        // Batch mode: updates array
+        if (args.updates && Array.isArray(args.updates)) {
+          // Pre-convert array items to snake_case (arrays are not recursed by convertCamelToSnakeCase)
+          const snakeUpdates = (args.updates as Array<Record<string, unknown>>).map(u => ({
+            node_path: u.nodePath,
+            property: u.property,
+            value: u.value,
+          }));
+          const params = {
+            scenePath: args.scenePath,
+            updates: snakeUpdates,
+            abortOnError: args.abortOnError ?? false,
+          };
+          const { stdout, stderr } = await runner.executeOperation('batch_update_node_properties', params, args.projectPath as string);
+          if (!stdout.trim()) {
+            return createErrorResponse(`Batch update failed: ${extractGdError(stderr)}`, ['Check node paths and property names']);
+          }
+          return { content: [{ type: 'text', text: stdout }] };
+        }
+        // Single-op
         if (!args.property || args.value === undefined) {
           return createErrorResponse('property and value are required for update_property', ['Provide both property name and value']);
         }
@@ -155,6 +207,21 @@ export async function handleManageNode(runner: GodotRunner, args: OperationParam
       }
 
       case 'get_properties': {
+        // Batch mode: nodes array
+        if (args.nodes && Array.isArray(args.nodes)) {
+          // Pre-convert array items to snake_case
+          const snakeNodes = (args.nodes as Array<Record<string, unknown>>).map(n => ({
+            node_path: n.nodePath,
+            ...(n.changedOnly !== undefined ? { changed_only: n.changedOnly } : {}),
+          }));
+          const params = { scenePath: args.scenePath, nodes: snakeNodes };
+          const { stdout, stderr } = await runner.executeOperation('batch_get_node_properties', params, args.projectPath as string);
+          if (!stdout.trim()) {
+            return createErrorResponse(`Batch get_properties failed: ${extractGdError(stderr)}`, ['Check node paths']);
+          }
+          return { content: [{ type: 'text', text: stdout }] };
+        }
+        // Single-op
         const params: OperationParams = { scenePath: args.scenePath, nodePath: args.nodePath };
         if (args.changedOnly) params.changedOnly = args.changedOnly;
         const { stdout, stderr } = await runner.executeOperation('get_node_properties', params, args.projectPath as string);

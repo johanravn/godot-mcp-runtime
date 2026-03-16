@@ -13,13 +13,13 @@ import {
 export const sceneToolDefinitions: ToolDefinition[] = [
   {
     name: 'manage_scene',
-    description: 'Manage Godot scene files using headless Godot. All mutation operations (create, add_node, load_sprite) save automatically — no explicit save call needed. Use the save operation only for save-as (newPath) or to re-canonicalize a .tscn file.\n\nOperations:\n- create: Create a new scene file (optional: rootNodeType, default Node2D)\n- add_node: Add a node to the scene (required: nodeType, nodeName; optional: parentNodePath, properties)\n- load_sprite: Set the texture on a Sprite2D, Sprite3D, or TextureRect node (required: nodePath, texturePath)\n- save: Re-pack and save the scene, optionally to a different path (optional: newPath for save-as)\n- export_mesh_library: Export scene as a MeshLibrary .res file (required: outputPath; optional: meshItemNames)',
+    description: 'Manage Godot scene files using headless Godot. All mutation operations (create, add_node, load_sprite) save automatically — no explicit save call needed. Use the save operation only for save-as (newPath) or to re-canonicalize a .tscn file.\n\nOperations:\n- create: Create a new scene file (optional: rootNodeType, default Node2D)\n- add_node: Add a node to the scene (required: nodeType, nodeName; optional: parentNodePath, properties)\n- load_sprite: Set the texture on a Sprite2D, Sprite3D, or TextureRect node (required: nodePath, texturePath)\n- save: Re-pack and save the scene, optionally to a different path (optional: newPath for save-as)\n- export_mesh_library: Export scene as a MeshLibrary .res file (required: outputPath; optional: meshItemNames)\n- batch: Execute multiple scene operations in a single Godot process (required: operations array; optional: abortOnError). Each operation item has its own operation, scenePath, and operation-specific fields. All mutations auto-save at the end — use an explicit save op only for save-as (newPath). Returns { results: [{ operation, scenePath, success?, error? }] }.',
     inputSchema: {
       type: 'object',
       properties: {
         operation: {
           type: 'string',
-          enum: ['create', 'add_node', 'load_sprite', 'save', 'export_mesh_library'],
+          enum: ['create', 'add_node', 'load_sprite', 'save', 'export_mesh_library', 'batch'],
           description: 'The scene operation to perform',
         },
         projectPath: {
@@ -71,8 +71,31 @@ export const sceneToolDefinitions: ToolDefinition[] = [
           items: { type: 'string' },
           description: '[export_mesh_library] Names of specific mesh items to export. Omit to export all.',
         },
+        operations: {
+          type: 'array',
+          description: '[batch] Ordered list of scene operations to run in a single Godot process. Each item has its own operation and scenePath. All mutations auto-save at the end. Use save only for save-as (newPath).',
+          items: {
+            type: 'object',
+            properties: {
+              operation: { type: 'string', enum: ['add_node', 'load_sprite', 'save'], description: 'The sub-operation to perform' },
+              scenePath: { type: 'string', description: 'Scene file path for this operation' },
+              nodeType: { type: 'string', description: '[add_node] Node class to instantiate' },
+              nodeName: { type: 'string', description: '[add_node] Name for the new node' },
+              parentNodePath: { type: 'string', description: '[add_node] Parent node path (defaults to root)' },
+              properties: { type: 'object', description: '[add_node] Initial property values' },
+              nodePath: { type: 'string', description: '[load_sprite] Target node path' },
+              texturePath: { type: 'string', description: '[load_sprite] Texture file path relative to project' },
+              newPath: { type: 'string', description: '[save] Save to a different path instead of overwriting' },
+            },
+            required: ['operation'],
+          },
+        },
+        abortOnError: {
+          type: 'boolean',
+          description: '[batch] Stop processing on first error (default: false — continue and record all errors)',
+        },
       },
-      required: ['operation', 'projectPath', 'scenePath'],
+      required: ['operation', 'projectPath'],
     },
   },
   {
@@ -105,14 +128,14 @@ export async function handleManageScene(runner: GodotRunner, args: OperationPara
 
   const operation = args.operation as string;
   if (!operation) {
-    return createErrorResponse('operation is required', ['Provide one of: create, add_node, load_sprite, save, export_mesh_library']);
+    return createErrorResponse('operation is required', ['Provide one of: create, add_node, load_sprite, save, export_mesh_library, batch']);
   }
 
-  if (!args.projectPath || !args.scenePath) {
+  if (!args.projectPath || (!args.scenePath && operation !== 'batch')) {
     return createErrorResponse('projectPath and scenePath are required', ['Provide valid paths for both']);
   }
 
-  if (!validatePath(args.projectPath as string) || !validatePath(args.scenePath as string)) {
+  if (!validatePath(args.projectPath as string) || (args.scenePath && !validatePath(args.scenePath as string))) {
     return createErrorResponse('Invalid path', ['Provide valid paths without ".." or other potentially unsafe characters']);
   }
 
@@ -124,8 +147,9 @@ export async function handleManageScene(runner: GodotRunner, args: OperationPara
     );
   }
 
-  // Scene file must exist for all operations except 'create'
-  if (operation !== 'create') {
+  // Scene file must exist for all operations except 'create' and 'batch'
+  // (batch validates scene existence per-operation inside GDScript)
+  if (operation !== 'create' && operation !== 'batch') {
     const sceneFullPath = join(args.projectPath as string, args.scenePath as string);
     if (!existsSync(sceneFullPath)) {
       return createErrorResponse(
@@ -224,8 +248,35 @@ export async function handleManageScene(runner: GodotRunner, args: OperationPara
         return { content: [{ type: 'text', text: stdout }] };
       }
 
+      case 'batch': {
+        if (!args.operations || !Array.isArray(args.operations)) {
+          return createErrorResponse('operations array is required for batch', ['Provide an operations array with at least one item']);
+        }
+        // Pre-convert operation items to snake_case for GDScript (arrays are not recursed by convertCamelToSnakeCase)
+        const snakeOps = (args.operations as Array<Record<string, unknown>>).map(op => ({
+          operation: op.operation,
+          ...(op.scenePath ? { scene_path: op.scenePath } : {}),
+          ...(op.nodeType ? { node_type: op.nodeType } : {}),
+          ...(op.nodeName ? { node_name: op.nodeName } : {}),
+          ...(op.parentNodePath ? { parent_node_path: op.parentNodePath } : {}),
+          ...(op.properties ? { properties: op.properties } : {}),
+          ...(op.nodePath ? { node_path: op.nodePath } : {}),
+          ...(op.texturePath ? { texture_path: op.texturePath } : {}),
+          ...(op.newPath ? { new_path: op.newPath } : {}),
+        }));
+        const params = {
+          operations: snakeOps,
+          abortOnError: args.abortOnError ?? false,
+        };
+        const { stdout, stderr } = await runner.executeOperation('batch_scene_operations', params, args.projectPath as string);
+        if (!stdout.trim()) {
+          return createErrorResponse(`Batch scene operations failed: ${extractGdError(stderr)}`, ['Check that all scene paths exist', 'Ensure node types are valid']);
+        }
+        return { content: [{ type: 'text', text: stdout }] };
+      }
+
       default:
-        return createErrorResponse(`Unknown operation: ${operation}`, ['Use one of: create, add_node, load_sprite, save, export_mesh_library']);
+        return createErrorResponse(`Unknown operation: ${operation}`, ['Use one of: create, add_node, load_sprite, save, export_mesh_library, batch']);
     }
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
