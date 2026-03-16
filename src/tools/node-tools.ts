@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import {
   GodotRunner,
   normalizeParameters,
+  convertCamelToSnakeCase,
   validatePath,
   createErrorResponse,
   extractGdError,
@@ -172,12 +173,11 @@ export async function handleManageNode(runner: GodotRunner, args: OperationParam
       case 'update_property': {
         // Batch mode: updates array
         if (args.updates && Array.isArray(args.updates)) {
-          // Pre-convert array items to snake_case (arrays are not recursed by convertCamelToSnakeCase)
-          const snakeUpdates = (args.updates as Array<Record<string, unknown>>).map(u => ({
-            node_path: u.nodePath,
-            property: u.property,
-            value: u.value,
-          }));
+          // Convert each item to snake_case for GDScript
+          // (convertCamelToSnakeCase doesn't recurse into arrays, so we map over items)
+          const snakeUpdates = (args.updates as Array<Record<string, unknown>>).map(u =>
+            convertCamelToSnakeCase(u as OperationParams)
+          );
           const params = {
             scenePath: args.scenePath,
             updates: snakeUpdates,
@@ -209,11 +209,10 @@ export async function handleManageNode(runner: GodotRunner, args: OperationParam
       case 'get_properties': {
         // Batch mode: nodes array
         if (args.nodes && Array.isArray(args.nodes)) {
-          // Pre-convert array items to snake_case
-          const snakeNodes = (args.nodes as Array<Record<string, unknown>>).map(n => ({
-            node_path: n.nodePath,
-            ...(n.changedOnly !== undefined ? { changed_only: n.changedOnly } : {}),
-          }));
+          // Convert each item to snake_case for GDScript
+          const snakeNodes = (args.nodes as Array<Record<string, unknown>>).map(n =>
+            convertCamelToSnakeCase(n as OperationParams)
+          );
           const params = { scenePath: args.scenePath, nodes: snakeNodes };
           const { stdout, stderr } = await runner.executeOperation('batch_get_node_properties', params, args.projectPath as string);
           if (!stdout.trim()) {

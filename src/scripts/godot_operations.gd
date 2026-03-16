@@ -1049,7 +1049,10 @@ func batch_scene_operations(params: Dictionary) -> void:
 					var new_path = op.get("new_path", scene_path)
 					if save_scene_to_path(scene_root, new_path):
 						result["success"] = true
-						scene_cache.erase(scene_path)
+						# Only evict on normal save; save-as leaves the mutated scene in
+						# cache so subsequent ops on scene_path still see accumulated mutations.
+						if new_path == scene_path:
+							scene_cache.erase(scene_path)
 					else:
 						result["error"] = "Failed to save scene: " + scene_path
 			_:

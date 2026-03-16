@@ -1,5 +1,6 @@
 import { join } from 'path';
 import { existsSync, writeFileSync, unlinkSync, mkdirSync } from 'fs';
+import { randomUUID } from 'crypto';
 import {
   GodotRunner,
   normalizeParameters,
@@ -56,78 +57,27 @@ interface ValidationError {
   message: string;
 }
 
-/**
- * Parse Godot stderr output for structured error information.
- * Godot emits parse errors to stderr when load() fails on a script.
- */
-function parseGodotErrors(stderr: string): ValidationError[] {
-  const errors: ValidationError[] = [];
-  if (!stderr) return errors;
-
-  const lines = stderr.split('\n');
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    // Pattern: "SCRIPT ERROR: Parse Error: MESSAGE"
-    // followed by "   at: res://...:LINE"
-    const scriptErrorMatch = line.match(/SCRIPT ERROR:\s*(?:Parse Error:\s*)?(.+)/);
-    if (scriptErrorMatch) {
-      const message = scriptErrorMatch[1].trim();
-      let lineNum: number | undefined;
-      // Look ahead for the "at:" line
-      if (i + 1 < lines.length) {
-        const atMatch = lines[i + 1].match(/\s*at:\s*.+:(\d+)/);
-        if (atMatch) {
-          lineNum = parseInt(atMatch[1], 10);
-          i++; // consume the "at:" line
-        }
-      }
-      errors.push({ line: lineNum, message });
-      continue;
-    }
-
-    // Pattern: "ERROR: ...\n   at: res://...:LINE"
-    const errorMatch = line.match(/^ERROR:\s*(.+)/);
-    if (errorMatch) {
-      const message = errorMatch[1].trim();
-      let lineNum: number | undefined;
-      if (i + 1 < lines.length) {
-        const atMatch = lines[i + 1].match(/\s*at:\s*.+:(\d+)/);
-        if (atMatch) {
-          lineNum = parseInt(atMatch[1], 10);
-          i++;
-        }
-      }
-      errors.push({ line: lineNum, message });
-      continue;
-    }
-
-    // Pattern: "Parse Error: MESSAGE at line LINE"
-    const parseErrorMatch = line.match(/Parse Error:\s*(.+?)\s+at line\s+(\d+)/);
-    if (parseErrorMatch) {
-      errors.push({
-        line: parseInt(parseErrorMatch[2], 10),
-        message: parseErrorMatch[1].trim(),
-      });
-    }
-  }
-
-  return errors;
+interface ParsedErrorEntry {
+  message: string;
+  line?: number;
+  filePath?: string;
 }
 
 /**
- * Parse Godot stderr and group errors by the res:// file path in the "at:" line.
- * Used for batch validation where multiple files produce output in one stderr stream.
+ * Core Godot stderr parser. Returns a flat list of error entries, each with an
+ * optional line number and optional res:// file path (from the "at:" line).
  */
-function parseGodotErrorsByPath(stderr: string): Map<string, ValidationError[]> {
-  const result = new Map<string, ValidationError[]>();
-  if (!stderr) return result;
+function parseGodotErrorEntries(stderr: string): ParsedErrorEntry[] {
+  const entries: ParsedErrorEntry[] = [];
+  if (!stderr) return entries;
 
   const lines = stderr.split('\n');
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
+    // Pattern: "SCRIPT ERROR: Parse Error: MESSAGE" or "ERROR: MESSAGE"
+    // followed by "   at: res://...:LINE" or "   at: ...:LINE"
     const scriptErrorMatch = line.match(/SCRIPT ERROR:\s*(?:Parse Error:\s*)?(.+)/);
     const errorMatch = !scriptErrorMatch ? line.match(/^ERROR:\s*(.+)/) : null;
     const match = scriptErrorMatch || errorMatch;
@@ -138,21 +88,55 @@ function parseGodotErrorsByPath(stderr: string): Map<string, ValidationError[]> 
       let filePath: string | undefined;
 
       if (i + 1 < lines.length) {
-        const atMatch = lines[i + 1].match(/\s*at:\s*(res:\/\/[^:]+):(\d+)/);
-        if (atMatch) {
-          filePath = atMatch[1];
-          lineNum = parseInt(atMatch[2], 10);
+        // Try res:// path first (captures file + line)
+        const resAtMatch = lines[i + 1].match(/\s*at:\s*(res:\/\/[^:]+):(\d+)/);
+        if (resAtMatch) {
+          filePath = resAtMatch[1];
+          lineNum = parseInt(resAtMatch[2], 10);
           i++;
+        } else {
+          // Fall back to loose match (line only, e.g. native code "at:" lines)
+          const looseAtMatch = lines[i + 1].match(/\s*at:\s*.+:(\d+)/);
+          if (looseAtMatch) {
+            lineNum = parseInt(looseAtMatch[1], 10);
+            i++;
+          }
         }
       }
 
-      if (filePath) {
-        if (!result.has(filePath)) result.set(filePath, []);
-        result.get(filePath)!.push({ line: lineNum, message });
-      }
+      entries.push({ message, line: lineNum, filePath });
+      continue;
+    }
+
+    // Pattern: "Parse Error: MESSAGE at line LINE"
+    const parseErrorMatch = line.match(/Parse Error:\s*(.+?)\s+at line\s+(\d+)/);
+    if (parseErrorMatch) {
+      entries.push({
+        line: parseInt(parseErrorMatch[2], 10),
+        message: parseErrorMatch[1].trim(),
+      });
     }
   }
 
+  return entries;
+}
+
+function parseGodotErrors(stderr: string): ValidationError[] {
+  return parseGodotErrorEntries(stderr).map(({ message, line }) => ({ message, line }));
+}
+
+/**
+ * Group Godot stderr errors by their res:// file path.
+ * Used for batch validation where multiple files produce output in one stderr stream.
+ */
+function parseGodotErrorsByPath(stderr: string): Map<string, ValidationError[]> {
+  const result = new Map<string, ValidationError[]>();
+  for (const { message, line, filePath } of parseGodotErrorEntries(stderr)) {
+    if (filePath) {
+      if (!result.has(filePath)) result.set(filePath, []);
+      result.get(filePath)!.push({ line, message });
+    }
+  }
   return result;
 }
 
@@ -188,7 +172,7 @@ export async function handleValidate(runner: GodotRunner, args: OperationParams)
         if (t.source) {
           const mcpDir = join(args.projectPath as string, '.mcp');
           if (!existsSync(mcpDir)) mkdirSync(mcpDir, { recursive: true });
-          const tempName = `validate_batch_${Date.now()}_${i}.gd`;
+          const tempName = `validate_batch_${randomUUID()}.gd`;
           const tempPath = join(mcpDir, tempName);
           writeFileSync(tempPath, t.source, 'utf8');
           tempFiles.push(tempPath);

@@ -3,6 +3,7 @@ import { existsSync } from 'fs';
 import {
   GodotRunner,
   normalizeParameters,
+  convertCamelToSnakeCase,
   validatePath,
   createErrorResponse,
   extractGdError,
@@ -252,18 +253,11 @@ export async function handleManageScene(runner: GodotRunner, args: OperationPara
         if (!args.operations || !Array.isArray(args.operations)) {
           return createErrorResponse('operations array is required for batch', ['Provide an operations array with at least one item']);
         }
-        // Pre-convert operation items to snake_case for GDScript (arrays are not recursed by convertCamelToSnakeCase)
-        const snakeOps = (args.operations as Array<Record<string, unknown>>).map(op => ({
-          operation: op.operation,
-          ...(op.scenePath ? { scene_path: op.scenePath } : {}),
-          ...(op.nodeType ? { node_type: op.nodeType } : {}),
-          ...(op.nodeName ? { node_name: op.nodeName } : {}),
-          ...(op.parentNodePath ? { parent_node_path: op.parentNodePath } : {}),
-          ...(op.properties ? { properties: op.properties } : {}),
-          ...(op.nodePath ? { node_path: op.nodePath } : {}),
-          ...(op.texturePath ? { texture_path: op.texturePath } : {}),
-          ...(op.newPath ? { new_path: op.newPath } : {}),
-        }));
+        // Convert each operation item to snake_case for GDScript
+        // (convertCamelToSnakeCase doesn't recurse into arrays, so we map over items)
+        const snakeOps = (args.operations as Array<Record<string, unknown>>).map(op =>
+          convertCamelToSnakeCase(op as OperationParams)
+        );
         const params = {
           operations: snakeOps,
           abortOnError: args.abortOnError ?? false,
