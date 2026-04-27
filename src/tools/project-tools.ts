@@ -678,13 +678,7 @@ export function handleDetachProject(runner: GodotRunner) {
     );
   }
 
-  const result = runner.stopProject();
-  if (!result) {
-    return createErrorResponse(
-      'No attached project to detach.',
-      ['Use attach_project first for manual-launch workflows']
-    );
-  }
+  const result = runner.stopProject()!;
 
   return {
     content: [{
@@ -722,7 +716,6 @@ export function handleGetDebugOutput(runner: GodotRunner, args: OperationParams 
     };
   }
 
-  const limit = typeof args.limit === 'number' ? args.limit : 200;
   const proc = runner.activeProcess;
   if (!proc) {
     return createErrorResponse(
@@ -730,6 +723,8 @@ export function handleGetDebugOutput(runner: GodotRunner, args: OperationParams 
       ['Use run_project to start a Godot project first', 'Or use attach_project only when stdout/stderr capture is not needed']
     );
   }
+
+  const limit = typeof args.limit === 'number' ? args.limit : 200;
   const response: {
     output: string[];
     errors: string[];

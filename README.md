@@ -11,17 +11,17 @@ When you run a project through this server, it injects a lightweight UDP bridge 
 
 **The distinction matters: the AI doesn't just write your game, it can check its work.**
 
-**No addon required.** Most Godot MCP servers that offer runtime support ship as a Godot addon — something you install into your project, commit to version control, and manage as a dependency. This server does none of that. The bridge script is injected on `run_project` or `attach_project`, then removed on `stop_project` / `detach_project`. Your project files are left exactly as they were. All you need is Node.js and a Godot executable — no addon installation, no project modifications, no cleanup.
-
-<a href="https://glama.ai/mcp/servers/@Erodenn/godot-runtime-mcp">
-  <img width="380" height="200" src="https://glama.ai/mcp/servers/@Erodenn/godot-runtime-mcp/badge" alt="godot-runtime-mcp MCP server" />
-</a>
+**No addon required.** Most Godot MCP servers that offer runtime support ship as a Godot addon — something you install into your project, commit to version control, and manage as a dependency. This server does none of that. The bridge script is injected on `run_project` or `attach_project`, then removed on `stop_project` or `detach_project`. Your project files are left exactly as they were. All you need is Node.js and a Godot executable, no addon installation, no project modifications, no cleanup.
 
 Think of it as [Playwright MCP](https://github.com/microsoft/playwright-mcp), but for Godot. Playwright lets agents verify that a web app actually works by driving a real browser. This does the same thing for games: run the project, take a screenshot, simulate input, read what's on screen, execute a script against the live scene tree. The agent closes the loop on its own changes rather than handing off to you to verify.
 
 This is not a playtesting replacement. It doesn't catch the subtle feel issues that only a human notices, and it won't tell you if your game is fun. What it does is let an agent confirm that a scene loads, a button responds, a value updated, a script ran without errors. That's a fundamentally different development workflow, and it's what this server is built for.
 
-Every operation is its own tool with only its relevant parameters — no operation discriminators, no conditional schemas. Each tool teaches agents how to use it through its description and response messages: what to call next, when to wait, and how to recover from errors.
+Every operation is its own tool with only its relevant parameters, no operation discriminators, no conditional schemas. Each tool teaches agents how to use it through its description and response messages: what to call next, when to wait, and how to recover from errors.
+
+<a href="https://glama.ai/mcp/servers/@Erodenn/godot-runtime-mcp">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@Erodenn/godot-runtime-mcp/badge" alt="godot-runtime-mcp MCP server" />
+</a>
 
 ## What It Does
 
@@ -34,9 +34,9 @@ Every operation is its own tool with only its relevant parameters — no operati
 - **UI discovery:** Walk the live scene tree and collect every visible Control node with its position, type, text content, and disabled state
 - **Live script execution:** Compile and run arbitrary GDScript with full SceneTree access while the game is running
 
-**Background mode.** Pass `background: true` to `run_project` and the Godot window moves off-screen with physical input blocked — borderless, unfocusable, mouse-passthrough. Programmatic input, screenshots, and all runtime tools work exactly the same. Useful for automated agent-driven testing where the window shouldn't be visible or interactive.
+**Background mode.** Pass `background: true` to `run_project` and the Godot window moves off-screen with physical input blocked: borderless, unfocusable, mouse-passthrough. Programmatic input, screenshots, and all runtime tools work exactly the same. Useful for automated agent-driven testing where the window shouldn't be visible or interactive.
 
-**Manual attach mode.** Use `attach_project` when you want MCP runtime tools against a Godot process you will launch yourself from a shell or another harness. `attach_project` injects the bridge and marks the project as active without spawning Godot. `detach_project` removes the injected bridge state later. In attached mode, `get_debug_output` reports that stdout/stderr capture is unavailable because MCP did not launch the process.
+**Manual attach mode.** When something other than MCP launches the game (a CI pipeline, an external debugger, your own shell), call `attach_project` first. It injects the bridge and marks the project active without spawning Godot, so when you launch the game manually, runtime tools work against it. The tradeoff: `get_debug_output` is unavailable in attached mode because stdout and stderr only flow through processes MCP started itself. Use `detach_project` when done.
 
 The bridge cleans itself up automatically when `stop_project` or `detach_project` is called. No leftover autoloads, no modified project files.
 
@@ -125,16 +125,16 @@ Ask your AI assistant to call `get_project_info`. If it returns a Godot version 
 |------|-------------|
 | `launch_editor` | Open the Godot editor GUI for a project |
 | `run_project` | Run a project in debug mode and inject the MCP bridge. Pass `background: true` to hide the window |
-| `attach_project` | Inject the MCP bridge and mark a project active without spawning Godot |
-| `detach_project` | Clear attached-mode state and remove the injected bridge without claiming the external process was stopped |
-| `stop_project` | Stop the running project and remove the bridge, or detach attached-mode state |
-| `get_debug_output` | Read stdout/stderr from an MCP-spawned project; attached mode reports that capture is unavailable |
+| `attach_project` | Inject the MCP bridge for a project you'll launch yourself |
+| `detach_project` | Remove the injected bridge after manual-launch use, leaving the external process alone |
+| `stop_project` | Stop the running project and remove the bridge (also detaches attached-mode state) |
+| `get_debug_output` | Read stdout/stderr from an MCP-spawned project (unavailable in attached mode) |
 | `list_projects` | Find Godot projects in a directory |
 | `get_project_info` | Get project metadata and Godot version |
 
 ### Runtime (requires `run_project` or `attach_project` first)
 
-After calling `run_project`, or after `attach_project` plus launching Godot manually, wait 2-3 seconds for the bridge to initialize before using these tools.
+After `run_project`, or after `attach_project` plus launching Godot manually, wait 2-3 seconds for the bridge to initialize before using these tools.
 
 | Tool | Description |
 |------|-------------|
@@ -221,22 +221,13 @@ Headless operations spawn Godot with `--headless --script godot_operations.gd`, 
 
 ## How the Bridge Works
 
-When `run_project` is called:
+When `run_project` or `attach_project` is called:
 
 1. `mcp_bridge.gd` is copied into the project directory
 2. It's registered as an autoload in `project.godot`
-3. The project launches with the bridge listening on `127.0.0.1:9900`
+3. Godot launches with the bridge listening on `127.0.0.1:9900`. With `run_project`, MCP spawns the process; with `attach_project`, you launch it yourself.
 4. Runtime tools send JSON commands to the bridge and await responses
-5. When `stop_project` is called, the autoload entry and bridge script are removed
-
-When `attach_project` is called:
-
-1. `mcp_bridge.gd` is copied into the project directory
-2. It's registered as an autoload in `project.godot`
-3. The server records the project as an attached runtime target without spawning Godot
-4. You launch Godot yourself, and the bridge listens on `127.0.0.1:9900`
-5. Runtime tools send JSON commands to the bridge and await responses
-6. `detach_project` or `stop_project` removes the injected bridge state later
+5. `stop_project` or `detach_project` removes the bridge script and autoload entry
 
 Files generated during runtime (screenshots, executed scripts) are stored in `.mcp/` inside the project directory. This directory is automatically added to `.gitignore` and has a `.gdignore` so Godot won't import it.
 
