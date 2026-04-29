@@ -3,9 +3,11 @@ extends Node
 var udp_server: UDPServer
 var port: int = 9900
 var _is_processing_input: bool = false
+var session_token: String = ""
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	session_token = OS.get_environment("MCP_SESSION_TOKEN")
 	udp_server = UDPServer.new()
 	var err = udp_server.listen(port, "127.0.0.1")
 	if err != OK:
@@ -72,7 +74,7 @@ func _handle_json_command(peer: PacketPeerUDP, data: String) -> void:
 		"screenshot":
 			_handle_screenshot(peer)
 		"ping":
-			_send_response(peer, {"status": "pong"})
+			_send_response(peer, {"status": "pong", "session_token": session_token})
 		_:
 			_send_response(peer, {"error": "Unknown command: %s" % command})
 

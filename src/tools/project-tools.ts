@@ -128,7 +128,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'run_project',
-    description: 'Run a Godot project with stdout/stderr captured. Preferred path for runtime tools. Required before calling take_screenshot, simulate_input, get_ui_elements, run_script, or get_debug_output unless you intentionally use attach_project for a manually launched game. After starting, wait 2–3 seconds for the MCP bridge to initialize before using runtime tools. Call stop_project when done.',
+    description: 'Run a Godot project in debug mode. Preferred path for runtime tools. Required before calling take_screenshot, simulate_input, get_ui_elements, run_script, or get_debug_output unless you intentionally use attach_project for a manually launched game. Verifies MCP bridge readiness before returning success. Call stop_project when done.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -228,7 +228,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'take_screenshot',
-    description: 'Capture a PNG screenshot of the running Godot viewport. Requires run_project first; wait 2–3 seconds after starting for the bridge to initialize. Returns the image inline. Screenshots are also saved to .mcp/screenshots/ in the project directory.',
+    description: 'Capture a PNG screenshot of the running Godot viewport. Requires an active runtime session (run_project or attach_project). Returns the image inline. Screenshots are also saved to .mcp/screenshots/ in the project directory.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -242,7 +242,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'simulate_input',
-    description: 'Simulate batched sequential input in a running Godot project. Requires run_project first; wait 2–3 seconds after starting. Use get_ui_elements first to discover element names and paths for click_element actions.\n\nEach action object requires a "type" field. Valid types and their specific fields:\n- key: keyboard event (key: string, pressed: bool, shift/ctrl/alt: bool)\n- mouse_button: click at coordinates (x, y: number, button: "left"|"right"|"middle", pressed: bool, double_click: bool)\n- mouse_motion: move cursor (x, y: number, relative_x, relative_y: number)\n- click_element: click a UI element by node path or node name (element: string, button, double_click)\n- action: fire a Godot input action (action: string, pressed: bool, strength: 0–1)\n- wait: pause between actions (ms: number)\n\nExamples:\n1. Press and release Space: [{type:"key",key:"Space",pressed:true},{type:"wait",ms:100},{type:"key",key:"Space",pressed:false}]\n2. Click a UI button (discover path with get_ui_elements first): [{type:"click_element",element:"StartButton"}]\n3. Left-click at viewport coordinates: [{type:"mouse_button",x:400,y:300,button:"left",pressed:true},{type:"mouse_button",x:400,y:300,button:"left",pressed:false}]\n4. Fire a Godot action: [{type:"action",action:"jump",pressed:true},{type:"wait",ms:200},{type:"action",action:"jump",pressed:false}]\n5. Type "hello": [{type:"key",key:"H",pressed:true},{type:"key",key:"H",pressed:false},{type:"key",key:"E",pressed:true},{type:"key",key:"E",pressed:false},{type:"key",key:"L",pressed:true},{type:"key",key:"L",pressed:false},{type:"key",key:"L",pressed:true},{type:"key",key:"L",pressed:false},{type:"key",key:"O",pressed:true},{type:"key",key:"O",pressed:false}]',
+    description: 'Simulate batched sequential input in a running Godot project. Requires an active runtime session (run_project or attach_project). Use get_ui_elements first to discover element names and paths for click_element actions.\n\nEach action object requires a "type" field. Valid types and their specific fields:\n- key: keyboard event (key: string, pressed: bool, shift/ctrl/alt: bool)\n- mouse_button: click at coordinates (x, y: number, button: "left"|"right"|"middle", pressed: bool, double_click: bool)\n- mouse_motion: move cursor (x, y: number, relative_x, relative_y: number)\n- click_element: click a UI element by node path or node name (element: string, button, double_click)\n- action: fire a Godot input action (action: string, pressed: bool, strength: 0–1)\n- wait: pause between actions (ms: number)\n\nExamples:\n1. Press and release Space: [{type:"key",key:"Space",pressed:true},{type:"wait",ms:100},{type:"key",key:"Space",pressed:false}]\n2. Click a UI button (discover path with get_ui_elements first): [{type:"click_element",element:"StartButton"}]\n3. Left-click at viewport coordinates: [{type:"mouse_button",x:400,y:300,button:"left",pressed:true},{type:"mouse_button",x:400,y:300,button:"left",pressed:false}]\n4. Fire a Godot action: [{type:"action",action:"jump",pressed:true},{type:"wait",ms:200},{type:"action",action:"jump",pressed:false}]\n5. Type "hello": [{type:"key",key:"H",pressed:true},{type:"key",key:"H",pressed:false},{type:"key",key:"E",pressed:true},{type:"key",key:"E",pressed:false},{type:"key",key:"L",pressed:true},{type:"key",key:"L",pressed:false},{type:"key",key:"L",pressed:true},{type:"key",key:"L",pressed:false},{type:"key",key:"O",pressed:true},{type:"key",key:"O",pressed:false}]',
     inputSchema: {
       type: 'object',
       properties: {
@@ -282,7 +282,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_ui_elements',
-    description: 'Get Control nodes from a running Godot project with their positions, sizes, types, and text. Requires run_project first; wait 2–3 seconds after starting. Call this before simulate_input with click_element to discover valid element names and paths. Returns: { elements: [{ name, path, type, rect: {x,y,width,height}, visible, text? (Button/Label/LineEdit/TextEdit), disabled? (buttons), tooltip? }] }',
+    description: 'Get Control nodes from a running Godot project with their positions, sizes, types, and text. Requires an active runtime session (run_project or attach_project). Call this before simulate_input with click_element to discover valid element names and paths. Returns: { elements: [{ name, path, type, rect: {x,y,width,height}, visible, text? (Button/Label/LineEdit/TextEdit), disabled? (buttons), tooltip? }] }',
     inputSchema: {
       type: 'object',
       properties: {
@@ -601,11 +601,46 @@ export async function handleRunProject(runner: GodotRunner, args: OperationParam
     const background = args.background === true;
     runner.runProject(args.projectPath as string, args.scene as string | undefined, background);
 
+    const bridgeResult = await runner.waitForBridge();
+
+    if (!bridgeResult.ready) {
+      if (runner.activeProcess && runner.activeProcess.hasExited) {
+        return createErrorResponse(
+          `Godot process exited before the MCP bridge could initialize.\n${bridgeResult.error || ''}`,
+          [
+            'Check get_debug_output for runtime errors',
+            'Verify a display server is available (Wayland/X11)',
+            'Check for broken autoloads with list_autoloads',
+            'Call stop_project to clean up, then try again',
+          ]
+        );
+      }
+
+      const lines = [
+        'Godot process started, but the MCP bridge did not respond within 8 seconds.',
+        '- The process is running — bridge may still be initializing',
+        '- Use get_debug_output to investigate',
+        '- Runtime tools may work if you retry after a moment',
+        '- Call stop_project when done',
+      ];
+      if (background) {
+        lines.push('- Background mode: window hidden, physical input blocked');
+      }
+      return createErrorResponse(
+        lines.join('\n'),
+        [
+          'Use get_debug_output to inspect the last captured logs',
+          'Check that UDP port 9900 is not occupied by another Godot process',
+          'Call stop_project to clean up, then run_project again',
+        ]
+      );
+    }
+
     const lines = [
-      'Godot project started.',
+      'Godot project started and MCP bridge is ready.',
+      '- Runtime tools (take_screenshot, simulate_input, get_ui_elements, run_script) are available now',
       '- Use get_debug_output to check runtime output and errors',
-      '- Wait 2–3 seconds before calling take_screenshot, simulate_input, get_ui_elements, or run_script (bridge needs time to initialize)',
-      '- Always call stop_project when done — it terminates the process and cleans up the MCP bridge',
+      '- Call stop_project when done',
     ];
     if (background) {
       lines.push('- Background mode: window hidden, physical input blocked');
@@ -657,7 +692,7 @@ export async function handleAttachProject(runner: GodotRunner, args: OperationPa
         text: [
           'Project attached for manual runtime use.',
           '- Launch Godot yourself after this call so the injected McpBridge can initialize',
-          '- Wait 2–3 seconds after launch before calling take_screenshot, simulate_input, get_ui_elements, or run_script',
+          '- Runtime tools will become available once the bridge responds (typically 2–3 seconds after launch)',
           '- get_debug_output is unavailable in attached mode because MCP did not spawn the process',
           '- Use detach_project or stop_project when done to clean up the injected bridge state',
         ].join('\n'),
@@ -958,7 +993,7 @@ export async function handleTakeScreenshot(runner: GodotRunner, args: OperationP
       `Failed to take screenshot: ${errorMessage}`,
       [
         'Ensure the project is running (use run_project first)',
-        'The bridge may not be ready yet — wait 2-3 seconds after starting, then check get_debug_output if the issue persists',
+        'The bridge may not be ready yet — use get_debug_output to investigate',
         'Check that UDP port 9900 is not blocked',
       ]
     );
@@ -1031,7 +1066,7 @@ export async function handleSimulateInput(runner: GodotRunner, args: OperationPa
       `Failed to simulate input: ${errorMessage}`,
       [
         'Ensure the project is running (use run_project first)',
-        'The bridge may not be ready yet — wait 2-3 seconds after starting, then check get_debug_output if the issue persists',
+        'The bridge may not be ready yet — use get_debug_output to investigate',
         'Check that UDP port 9900 is not blocked',
       ]
     );
@@ -1090,7 +1125,7 @@ export async function handleGetUiElements(runner: GodotRunner, args: OperationPa
       `Failed to get UI elements: ${errorMessage}`,
       [
         'Ensure the project is running (use run_project first)',
-        'The bridge may not be ready yet — wait 2-3 seconds after starting, then check get_debug_output if the issue persists',
+        'The bridge may not be ready yet — use get_debug_output to investigate',
         'Check that UDP port 9900 is not blocked',
       ]
     );

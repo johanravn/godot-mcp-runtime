@@ -107,7 +107,7 @@ Tool categories:
 Key behaviors:
 - All mutation operations (add_node, set_node_property, delete_node, etc.) save the scene automatically. Only use save_scene for save-as (newPath) or re-canonicalization.
 - Headless Godot initializes ALL registered autoloads. If any autoload is broken, headless operations will fail. Use list_autoloads / remove_autoload to diagnose.
-- After run_project, wait 2-3 seconds before using runtime tools (take_screenshot, simulate_input, get_ui_elements, run_script). The MCP bridge needs time to initialize.
+- run_project verifies bridge readiness before returning success. If it reports degraded status, retry runtime tools after a moment or check get_debug_output.
 - attach_project is the fallback path for a manually launched Godot process. It injects the bridge and marks the project active, but it does not spawn Godot or capture stdout/stderr.
 - click_element in simulate_input resolves by node path or node name (BFS search), NOT by visible text. Use get_ui_elements to discover valid element identifiers.
 - run_script expects GDScript with "extends RefCounted" and "func execute(scene_tree: SceneTree) -> Variant".
