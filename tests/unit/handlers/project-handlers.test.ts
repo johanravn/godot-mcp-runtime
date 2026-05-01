@@ -13,15 +13,12 @@ import {
   handleGetProjectSettings,
   handleListProjects,
 } from '../../../src/tools/project-tools.js';
+import { hasError } from '../../helpers/assertions.js';
 import { fixtureProjectPath } from '../../helpers/fixture-paths.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function hasError(result: unknown): boolean {
-  return typeof result === 'object' && result !== null && 'isError' in result;
-}
 
 /** Create a minimal tmp Godot project (project.godot only). */
 function makeTmpProject(): string {

@@ -8,6 +8,7 @@ import {
   handleManageUids,
 } from '../../../src/tools/scene-tools.js';
 import { createFakeRunner } from '../../helpers/fake-runner.js';
+import { hasError } from '../../helpers/assertions.js';
 import { fixtureProjectPath, fixtureScenePath } from '../../helpers/fixture-paths.js';
 
 // ---------------------------------------------------------------------------
@@ -15,10 +16,6 @@ import { fixtureProjectPath, fixtureScenePath } from '../../helpers/fixture-path
 // ---------------------------------------------------------------------------
 
 const validBase = { projectPath: fixtureProjectPath, scenePath: fixtureScenePath };
-
-function hasError(result: unknown): boolean {
-  return typeof result === 'object' && result !== null && 'isError' in result;
-}
 
 // ---------------------------------------------------------------------------
 // handleCreateScene
@@ -49,7 +46,7 @@ describe('handleCreateScene', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner returns empty stdout', async () => {
+  it('treats empty Godot output as a failed operation', async () => {
     const fake = createFakeRunner({ stdout: '' });
     const result = await handleCreateScene(fake.asRunner, {
       projectPath: fixtureProjectPath,
@@ -58,7 +55,7 @@ describe('handleCreateScene', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
     const result = await handleCreateScene(fake.asRunner, {
       projectPath: fixtureProjectPath,
@@ -133,7 +130,7 @@ describe('handleAddNode', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner returns empty stdout', async () => {
+  it('treats empty Godot output as a failed operation', async () => {
     const fake = createFakeRunner({ stdout: '' });
     const result = await handleAddNode(fake.asRunner, {
       ...validBase,
@@ -143,7 +140,7 @@ describe('handleAddNode', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
     const result = await handleAddNode(fake.asRunner, {
       ...validBase,
@@ -209,16 +206,13 @@ describe('handleLoadSprite', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
-    // We need a valid texture path to pass fs check; skip by providing a nonexistent texture
-    // which causes an error before the runner is called. Test the runner-throws path
-    // separately with a valid texture existing in the fixture.
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
-    // texturePath must exist — use project.godot as a stand-in texture that exists on disk
+    // texturePath must point at an existing file so we get past fs validation and reach the runner.
     const result = await handleLoadSprite(fake.asRunner, {
       ...validBase,
       nodePath: 'root/Sprite',
-      texturePath: 'project.godot',
+      texturePath: 'placeholder.png',
     });
     expect(hasError(result)).toBe(true);
   });
@@ -262,13 +256,13 @@ describe('handleSaveScene', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner returns empty stdout', async () => {
+  it('treats empty Godot output as a failed operation', async () => {
     const fake = createFakeRunner({ stdout: '' });
     const result = await handleSaveScene(fake.asRunner, validBase);
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
     const result = await handleSaveScene(fake.asRunner, validBase);
     expect(hasError(result)).toBe(true);
@@ -324,7 +318,7 @@ describe('handleExportMeshLibrary', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner returns empty stdout', async () => {
+  it('treats empty Godot output as a failed operation', async () => {
     const fake = createFakeRunner({ stdout: '' });
     const result = await handleExportMeshLibrary(fake.asRunner, {
       ...validBase,
@@ -333,7 +327,7 @@ describe('handleExportMeshLibrary', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
     const result = await handleExportMeshLibrary(fake.asRunner, {
       ...validBase,

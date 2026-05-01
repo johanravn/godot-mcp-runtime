@@ -10,6 +10,7 @@ import {
   handleDisconnectSignal,
 } from '../../../src/tools/node-tools.js';
 import { createFakeRunner } from '../../helpers/fake-runner.js';
+import { hasError } from '../../helpers/assertions.js';
 import { fixtureProjectPath, fixtureScenePath } from '../../helpers/fixture-paths.js';
 
 // ---------------------------------------------------------------------------
@@ -17,10 +18,6 @@ import { fixtureProjectPath, fixtureScenePath } from '../../helpers/fixture-path
 // ---------------------------------------------------------------------------
 
 const validBase = { projectPath: fixtureProjectPath, scenePath: fixtureScenePath };
-
-function hasError(result: unknown): boolean {
-  return typeof result === 'object' && result !== null && 'isError' in result;
-}
 
 // ---------------------------------------------------------------------------
 // handleDeleteNode
@@ -71,7 +68,7 @@ describe('handleDeleteNode', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner returns empty stdout', async () => {
+  it('treats empty Godot output as a failed operation', async () => {
     const fake = createFakeRunner({ stdout: '' });
     const result = await handleDeleteNode(fake.asRunner, {
       ...validBase,
@@ -80,7 +77,7 @@ describe('handleDeleteNode', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
     const result = await handleDeleteNode(fake.asRunner, {
       ...validBase,
@@ -150,7 +147,7 @@ describe('handleSetNodeProperty', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner returns empty stdout', async () => {
+  it('treats empty Godot output as a failed operation', async () => {
     const fake = createFakeRunner({ stdout: '' });
     const result = await handleSetNodeProperty(fake.asRunner, {
       ...validBase,
@@ -161,7 +158,7 @@ describe('handleSetNodeProperty', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
     const result = await handleSetNodeProperty(fake.asRunner, {
       ...validBase,
@@ -213,7 +210,7 @@ describe('handleGetNodeProperties', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner returns empty stdout', async () => {
+  it('treats empty Godot output as a failed operation', async () => {
     const fake = createFakeRunner({ stdout: '' });
     const result = await handleGetNodeProperties(fake.asRunner, {
       ...validBase,
@@ -222,7 +219,7 @@ describe('handleGetNodeProperties', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
     const result = await handleGetNodeProperties(fake.asRunner, {
       ...validBase,
@@ -307,13 +304,12 @@ describe('handleAttachScript', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
-    // project.godot exists in the fixture, use it as a stand-in "script" so the fs check passes
     const result = await handleAttachScript(fake.asRunner, {
       ...validBase,
       nodePath: 'root/Node',
-      scriptPath: 'project.godot',
+      scriptPath: 'placeholder.gd',
     });
     expect(hasError(result)).toBe(true);
   });
@@ -357,13 +353,13 @@ describe('handleGetSceneTree', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner returns empty stdout', async () => {
+  it('treats empty Godot output as a failed operation', async () => {
     const fake = createFakeRunner({ stdout: '' });
     const result = await handleGetSceneTree(fake.asRunner, validBase);
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
     const result = await handleGetSceneTree(fake.asRunner, validBase);
     expect(hasError(result)).toBe(true);
@@ -420,7 +416,7 @@ describe('handleDuplicateNode', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner returns empty stdout', async () => {
+  it('treats empty Godot output as a failed operation', async () => {
     const fake = createFakeRunner({ stdout: '' });
     const result = await handleDuplicateNode(fake.asRunner, {
       ...validBase,
@@ -429,7 +425,7 @@ describe('handleDuplicateNode', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
     const result = await handleDuplicateNode(fake.asRunner, {
       ...validBase,
@@ -516,7 +512,7 @@ describe('handleConnectSignal', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner returns empty stdout', async () => {
+  it('treats empty Godot output as a failed operation', async () => {
     const fake = createFakeRunner({ stdout: '' });
     const result = await handleConnectSignal(fake.asRunner, {
       ...validBase,
@@ -528,7 +524,7 @@ describe('handleConnectSignal', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
     const result = await handleConnectSignal(fake.asRunner, {
       ...validBase,
@@ -618,7 +614,7 @@ describe('handleDisconnectSignal', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner returns empty stdout', async () => {
+  it('treats empty Godot output as a failed operation', async () => {
     const fake = createFakeRunner({ stdout: '' });
     const result = await handleDisconnectSignal(fake.asRunner, {
       ...validBase,
@@ -630,7 +626,7 @@ describe('handleDisconnectSignal', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws', async () => {
+  it('surfaces runner exceptions as a structured MCP error response', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
     const result = await handleDisconnectSignal(fake.asRunner, {
       ...validBase,

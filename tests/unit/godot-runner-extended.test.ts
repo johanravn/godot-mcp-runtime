@@ -64,26 +64,21 @@ describe('cleanOutput', () => {
 
 describe('normalizeForCompare', () => {
   it('converts Windows backslashes to forward slashes', () => {
-    const result = normalizeForCompare('C:\\Users\\foo\\project');
-    expect(result).not.toContain('\\');
+    expect(normalizeForCompare('C:\\Users\\foo\\project')).toBe('C:/Users/foo/project');
   });
 
   it('strips a trailing slash', () => {
-    const result = normalizeForCompare('/some/path/');
-    expect(result.endsWith('/')).toBe(false);
+    expect(normalizeForCompare('/some/path/')).toBe('/some/path');
   });
 
   it('strips a trailing backslash', () => {
-    // After replace, trailing backslash becomes trailing slash which is then stripped
-    const result = normalizeForCompare('C:\\project\\');
-    expect(result.endsWith('/')).toBe(false);
-    expect(result.endsWith('\\')).toBe(false);
+    expect(normalizeForCompare('C:\\project\\')).toBe('C:/project');
   });
 
   it('handles mixed separators', () => {
-    const result = normalizeForCompare('C:\\Users/foo\\project/scenes');
-    expect(result).not.toContain('\\');
-    expect(result.endsWith('/')).toBe(false);
+    expect(normalizeForCompare('C:\\Users/foo\\project/scenes')).toBe(
+      'C:/Users/foo/project/scenes',
+    );
   });
 
   it('is stable on paths that are already normalized', () => {

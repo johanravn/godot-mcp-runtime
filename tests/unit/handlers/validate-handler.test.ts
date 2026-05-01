@@ -1,15 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { handleValidate } from '../../../src/tools/validate-tools.js';
 import { createFakeRunner } from '../../helpers/fake-runner.js';
+import { hasError } from '../../helpers/assertions.js';
 import { fixtureProjectPath, fixtureScenePath } from '../../helpers/fixture-paths.js';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function hasError(result: unknown): boolean {
-  return typeof result === 'object' && result !== null && 'isError' in result;
-}
 
 // ---------------------------------------------------------------------------
 // handleValidate — single-target mode
@@ -151,7 +144,7 @@ describe('handleValidate (batch mode)', () => {
     expect(hasError(result)).toBe(false);
   });
 
-  it('returns isError when runner returns empty stdout in batch mode', async () => {
+  it('treats empty Godot output as a failed operation in batch mode', async () => {
     const fake = createFakeRunner({ stdout: '' });
     const result = await handleValidate(fake.asRunner, {
       projectPath: fixtureProjectPath,
@@ -160,7 +153,7 @@ describe('handleValidate (batch mode)', () => {
     expect(hasError(result)).toBe(true);
   });
 
-  it('returns isError when runner throws in batch mode', async () => {
+  it('surfaces runner exceptions as a structured MCP error response in batch mode', async () => {
     const fake = createFakeRunner({ throws: new Error('boom') });
     const result = await handleValidate(fake.asRunner, {
       projectPath: fixtureProjectPath,
