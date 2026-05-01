@@ -32,7 +32,7 @@ function normalizeForCompare(p: string): string {
  * Extract JSON from Godot output by finding the first { or [ and matching to the end.
  * This strips debug logs, version banners, and other noise.
  */
-function extractJson(output: string): string {
+export function extractJson(output: string): string {
   // Find the first occurrence of { or [
   const jsonStartBrace = output.indexOf('{');
   const jsonStartBracket = output.indexOf('[');
