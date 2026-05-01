@@ -19,8 +19,8 @@ tests/
 | File                                          | Covers                                                                                                                   | Notes                                    |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
 | `unit/godot-runner.test.ts`                   | `normalizeParameters`, `convertCamelToSnakeCase`, `validatePath`, `extractGdError`, `createErrorResponse`, `extractJson` | First batch from dev-bootstrap           |
-| `unit/godot-runner-extended.test.ts`          | _(planned, helper-coverage)_ `cleanOutput`, `normalizeForCompare`, `validateProjectArgs`, `validateSceneArgs`            |                                          |
-| `unit/tool-definitions.test.ts`               | _(planned, helper-coverage)_ Shape contract for every tool definition; no duplicate names                                |                                          |
+| `unit/godot-runner-extended.test.ts`          | `cleanOutput`, `normalizeForCompare`, `validateProjectArgs`, `validateSceneArgs`                                         |                                          |
+| `unit/tool-definitions.test.ts`               | Shape contract for every tool definition; no duplicate names                                                             |                                          |
 | `unit/handlers/scene-handlers.test.ts`        | _(planned, handler-validation)_ Argument validation in `src/tools/scene-tools.ts` handlers                               | Uses `tests/helpers/fake-runner.ts`      |
 | `unit/handlers/node-handlers.test.ts`         | _(planned, handler-validation)_ Argument validation in `src/tools/node-tools.ts` handlers                                | Uses `tests/helpers/fake-runner.ts`      |
 | `unit/handlers/project-handlers.test.ts`      | _(planned, handler-validation)_ Argument validation for non-runtime project handlers (autoload, fs, search, settings)    | Tmp dirs over `fs` mocking               |
