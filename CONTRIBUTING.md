@@ -25,6 +25,7 @@ Set `GODOT_PATH` to your Godot 4.x executable for runtime tests and manual exerc
 | `npm test`              | Vitest run                                              |
 | `npm run test:watch`    | Vitest watch mode                                       |
 | `npm run test:coverage` | Vitest with v8 coverage                                 |
+| `npm run verify`        | Run everything CI runs, in order, stop on first failure |
 
 CI runs typecheck → lint → format:check → test → build on Node 18, 20, 22 for every push and PR to `main`.
 
