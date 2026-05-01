@@ -34,5 +34,6 @@ Thumbs.db
 .claude/
 .mcp.json
 
-# Test fixture project
+# Local-only Godot test project (ad hoc manual testing).
+# The committed shared fixture lives at tests/fixtures/godot-project/.
 .test-project/
