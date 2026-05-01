@@ -12,6 +12,22 @@ const __dirname = dirname(__filename);
 // Debug mode from environment
 const DEBUG_MODE = process.env.DEBUG === 'true';
 
+// Bridge readiness polling
+const BRIDGE_WAIT_SPAWNED_TIMEOUT_MS = 8000;
+const BRIDGE_WAIT_SPAWNED_INTERVAL_MS = 300;
+const BRIDGE_WAIT_ATTACHED_TIMEOUT_MS = 15000;
+const BRIDGE_WAIT_ATTACHED_INTERVAL_MS = 500;
+const BRIDGE_PING_TIMEOUT_MS = 1000;
+
+/**
+ * Normalize a path for cross-platform comparison.
+ * Folds Windows backslashes to forward slashes and strips trailing slashes,
+ * so Node's `path.normalize` output matches Godot's `globalize_path("res://")`.
+ */
+function normalizeForCompare(p: string): string {
+  return normalize(p).replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
 /**
  * Extract JSON from Godot output by finding the first { or [ and matching to the end.
  * This strips debug logs, version banners, and other noise.
@@ -768,6 +784,10 @@ export class GodotRunner {
     }
   }
 
+  /**
+   * Idempotent within a session: short-circuits on `injectedProjects` so a
+   * second `attach_project`/`run_project` call does not rewrite `project.godot`.
+   */
   injectBridgeAutoload(projectPath: string): void {
     if (this.injectedProjects.has(projectPath)) {
       logDebug('Bridge already injected for this project, skipping');
@@ -935,17 +955,20 @@ export class GodotRunner {
     return { response, runtimeErrors };
   }
 
-  async waitForBridgeAttached(timeoutMs: number = 15000, intervalMs: number = 500): Promise<{ ready: boolean; error?: string }> {
+  async waitForBridgeAttached(
+    timeoutMs: number = BRIDGE_WAIT_ATTACHED_TIMEOUT_MS,
+    intervalMs: number = BRIDGE_WAIT_ATTACHED_INTERVAL_MS,
+  ): Promise<{ ready: boolean; error?: string }> {
     const deadline = Date.now() + timeoutMs;
-    const expectedPath = this.activeProjectPath ? normalize(this.activeProjectPath) + '/' : null;
+    const expectedPath = this.activeProjectPath ? normalizeForCompare(this.activeProjectPath) : null;
 
     while (Date.now() < deadline) {
       try {
-        const response = await this.sendCommand('ping', {}, 1000);
+        const response = await this.sendCommand('ping', {}, BRIDGE_PING_TIMEOUT_MS);
         const parsed = JSON.parse(response);
         if (parsed.status === 'pong') {
           if (expectedPath && parsed.project_path) {
-            const bridgePath = normalize(parsed.project_path);
+            const bridgePath = normalizeForCompare(parsed.project_path);
             if (bridgePath !== expectedPath) {
               return { ready: false, error: `Bridge is running for a different project (${bridgePath}), expected ${expectedPath}` };
             }
@@ -962,9 +985,13 @@ export class GodotRunner {
     return { ready: false, error: 'Bridge did not respond within timeout — is Godot running with the McpBridge autoload?' };
   }
 
-  async waitForBridge(timeoutMs: number = 8000, intervalMs: number = 300): Promise<{ ready: boolean; error?: string }> {
+  async waitForBridge(
+    timeoutMs: number = BRIDGE_WAIT_SPAWNED_TIMEOUT_MS,
+    intervalMs: number = BRIDGE_WAIT_SPAWNED_INTERVAL_MS,
+  ): Promise<{ ready: boolean; error?: string }> {
     const deadline = Date.now() + timeoutMs;
     const expectedToken = this.activeProcess?.sessionToken;
+    const expectedPath = this.activeProjectPath ? normalizeForCompare(this.activeProjectPath) : null;
 
     if (!expectedToken) {
       return { ready: false, error: 'No active spawned Godot process to verify' };
@@ -981,9 +1008,15 @@ export class GodotRunner {
       }
 
       try {
-        const response = await this.sendCommand('ping', { session_token: expectedToken }, 1000);
+        const response = await this.sendCommand('ping', { session_token: expectedToken }, BRIDGE_PING_TIMEOUT_MS);
         const parsed = JSON.parse(response);
         if (parsed.status === 'pong' && parsed.session_token === expectedToken) {
+          if (expectedPath && parsed.project_path) {
+            const bridgePath = normalizeForCompare(parsed.project_path);
+            if (bridgePath !== expectedPath) {
+              return { ready: false, error: `Bridge reports project ${bridgePath}, expected ${expectedPath}` };
+            }
+          }
           return { ready: true };
         }
       } catch {

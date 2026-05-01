@@ -128,7 +128,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'run_project',
-    description: 'Run a Godot project in debug mode. Preferred path for runtime tools. Required before calling take_screenshot, simulate_input, get_ui_elements, run_script, or get_debug_output unless you intentionally use attach_project for a manually launched game. Verifies MCP bridge readiness before returning success. Call stop_project when done.',
+    description: 'Run a Godot project with stdout/stderr captured. Preferred path for runtime tools. Required before calling take_screenshot, simulate_input, get_ui_elements, run_script, or get_debug_output unless you intentionally use attach_project for a manually launched game. Verifies MCP bridge readiness before returning success. Call stop_project when done.',
     inputSchema: {
       type: 'object',
       properties: {
