@@ -694,19 +694,15 @@ export async function handleAttachProject(runner: GodotRunner, args: OperationPa
       const bridgeResult = await runner.waitForBridgeAttached();
 
       if (!bridgeResult.ready) {
-        return {
-          content: [{
-            type: 'text',
-            text: [
-              'Project attached but the MCP bridge did not respond within 15 seconds.',
-              '- Verify Godot is running with this project',
-              '- The McpBridge autoload must be initialized and listening on UDP port 9900',
-              '- Runtime tools may work if you retry after a moment',
-              '- get_debug_output is unavailable in attached mode',
-              '- Use detach_project or stop_project when done',
-            ].join('\n'),
-          }],
-        };
+        return createErrorResponse(
+          `Project attached but the MCP bridge is not ready.\n${bridgeResult.error || ''}`,
+          [
+            'Verify Godot is running with this project',
+            'The McpBridge autoload must be initialized and listening on UDP port 9900',
+            'Check that no other Godot project is occupying port 9900',
+            'Use detach_project or stop_project when done',
+          ]
+        );
       }
 
       return {

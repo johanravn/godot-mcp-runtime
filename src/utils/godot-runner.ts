@@ -937,12 +937,19 @@ export class GodotRunner {
 
   async waitForBridgeAttached(timeoutMs: number = 15000, intervalMs: number = 500): Promise<{ ready: boolean; error?: string }> {
     const deadline = Date.now() + timeoutMs;
+    const expectedPath = this.activeProjectPath ? normalize(this.activeProjectPath) + '/' : null;
 
     while (Date.now() < deadline) {
       try {
         const response = await this.sendCommand('ping', {}, 1000);
         const parsed = JSON.parse(response);
         if (parsed.status === 'pong') {
+          if (expectedPath && parsed.project_path) {
+            const bridgePath = normalize(parsed.project_path);
+            if (bridgePath !== expectedPath) {
+              return { ready: false, error: `Bridge is running for a different project (${bridgePath}), expected ${expectedPath}` };
+            }
+          }
           return { ready: true };
         }
       } catch {

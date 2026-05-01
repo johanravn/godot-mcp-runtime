@@ -74,7 +74,7 @@ func _handle_json_command(peer: PacketPeerUDP, data: String) -> void:
 		"screenshot":
 			_handle_screenshot(peer)
 		"ping":
-			_send_response(peer, {"status": "pong", "session_token": session_token})
+			_send_response(peer, {"status": "pong", "session_token": session_token, "project_path": ProjectSettings.globalize_path("res://")})
 		_:
 			_send_response(peer, {"error": "Unknown command: %s" % command})
 
