@@ -1,8 +1,6 @@
 # Tests
 
-Index of what is tested where. Update this file when adding a new test file or fixture.
-
-See `../CONTRIBUTING.md` for the testing philosophy (when, what, how).
+Index of what is tested where, plus the rubric for when/what/how to test. Update this file when adding a new test file or fixture.
 
 ## Layout
 
@@ -52,3 +50,45 @@ CI does not install Godot, so those tests skip there. This is intentional — ru
 Use a sibling directory under `tests/fixtures/` rather than mutating an existing fixture in place. Existing tests may depend on the current shape.
 
 If the fixture exercises tools that require Godot, add a row to the coverage map noting it requires `GODOT_PATH`.
+
+## Testing rubric
+
+CI does not install Godot. Godot-required tests run only when contributors run them locally with `GODOT_PATH` set. Everything else runs everywhere.
+
+### When to write a test
+
+1. The function bridges a boundary — TS↔GDScript, MCP client↔handler, UDP, child process, fs
+2. The function encodes a contract another part of the system depends on — MCP response shape, error response shape, tool input schema, parameter casing
+3. The function has more than one branch that `tsc` can't catch — argument validation, error fallbacks, output parsing
+4. There's a documented invariant — `console.log` ban, auto-save, `..` rejection, `-d` debugger trap
+5. There's a past bug whose fix is not structural (regression test)
+
+### When NOT to write a test
+
+- The thing under test is what `tsc` already verifies (type shape, presence of a property)
+- The test snapshots a tool-definition array (brittle; agents will regenerate them reflexively)
+- The test mocks an internal helper just to verify the handler "called it" (couples the test to implementation, not behavior)
+- The branch is unreachable in practice (defensive `null` checks behind exhaustive types)
+
+### What to test
+
+- **Behavior** (input → output), not implementation (which methods got called)
+- **Boundaries**: shape of data crossing TS↔GDScript, MCP↔handler, UDP↔bridge
+- **Error paths** with the same care as happy paths — the error response shape is the MCP contract
+- **Invariants**: auto-save, path validation, error-response structure, parameter casing round-trip
+
+### How to test
+
+- Prefer real integration when fast — vitest + the committed fixture, no Godot needed
+- For Godot-required tests, use `it.skipIf(!process.env.GODOT_PATH)` so the suite stays green without Godot installed
+- Mock at the I/O boundary only: `child_process`, `dgram`, destructive `fs` ops. Never mock `godot-runner` from handler tests — pass a fake runner via the handler's runner parameter instead
+- One assertion per behavior; don't bundle three contracts into one test
+- Test names describe behavior: `"rejects scenePath containing .."` not `"validateSceneArgs handles bad input"`
+- Don't write coverage targets. Coverage is a side effect of testing the right things, not a goal
+
+### Anti-patterns specific to this codebase
+
+- Don't test that `console.error` was called — the lint rule already protects the stdout transport
+- Don't snapshot whole tool-definition arrays — assert that every entry has the expected fields and that names match handlers
+- Don't write integration tests that mutate the committed fixture in place — copy it to a tmp dir first or use a sibling fixture under `tests/fixtures/`
+- Don't assert on Godot version banners or stderr formatting — Godot patches change these

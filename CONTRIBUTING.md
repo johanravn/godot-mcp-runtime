@@ -37,52 +37,7 @@ CI runs typecheck → lint → format:check → test → build on Node 18, 20, 2
 
 ## Testing
 
-Layout:
-
-- `tests/unit/` — pure-function and shape-contract tests; no Godot, no I/O
-- `tests/integration/` — tests that touch fixtures or run real Godot. Godot-required tests gate on `process.env.GODOT_PATH` and skip when unset
-- `tests/fixtures/godot-project/` — committed minimal Godot 4 project; shared with CI. The gitignored `.test-project/` is for ad hoc local exploration only
-- `tests/README.md` — index of what is tested where
-
-CI runs the full unit + integration suite, but Godot is not installed on CI runners. Godot-required tests run only when contributors run them locally with `GODOT_PATH` set.
-
-### When to write a test
-
-1. The function bridges a boundary — TS↔GDScript, MCP client↔handler, UDP, child process, fs
-2. The function encodes a contract another part of the system depends on — MCP response shape, error response shape, tool input schema, parameter casing
-3. The function has more than one branch that `tsc` can't catch — argument validation, error fallbacks, output parsing
-4. There's a documented invariant — `console.log` ban, auto-save, `..` rejection, `-d` debugger trap
-5. There's a past bug whose fix is not structural (regression test)
-
-### When NOT to write a test
-
-- The thing under test is what `tsc` already verifies (type shape, presence of a property)
-- The test snapshots a tool-definition array (brittle; agents will regenerate them reflexively)
-- The test mocks an internal helper just to verify the handler "called it" (couples the test to implementation, not behavior)
-- The branch is unreachable in practice (defensive `null` checks behind exhaustive types)
-
-### What to test
-
-- **Behavior** (input → output), not implementation (which methods got called)
-- **Boundaries**: shape of data crossing TS↔GDScript, MCP↔handler, UDP↔bridge
-- **Error paths** with the same care as happy paths — the error response shape is the MCP contract
-- **Invariants**: auto-save, path validation, error-response structure, parameter casing round-trip
-
-### How to test
-
-- Prefer real integration when fast — vitest + the committed fixture, no Godot needed
-- For Godot-required tests, use `it.skipIf(!process.env.GODOT_PATH)` so the suite stays green without Godot installed
-- Mock at the I/O boundary only: `child_process`, `dgram`, destructive `fs` ops. Never mock `godot-runner` from handler tests — pass a fake runner via the handler's runner parameter instead
-- One assertion per behavior; don't bundle three contracts into one test
-- Test names describe behavior: `"rejects scenePath containing .."` not `"validateSceneArgs handles bad input"`
-- Don't write coverage targets. Coverage is a side effect of testing the right things, not a goal
-
-### Anti-patterns specific to this codebase
-
-- Don't test that `console.error` was called — the lint rule already protects the stdout transport
-- Don't snapshot whole tool-definition arrays — assert that every entry has the expected fields and that names match handlers
-- Don't write integration tests that mutate the committed fixture in place — copy it to a tmp dir first or use a sibling fixture under `tests/fixtures/`
-- Don't assert on Godot version banners or stderr formatting — Godot patches change these
+See `tests/README.md` for the test layout, the rubric on when/what/how to test, and the coverage map. Run `npm test` to execute the suite, or `npm run verify` to run everything CI runs.
 
 ## Architectural invariants
 
