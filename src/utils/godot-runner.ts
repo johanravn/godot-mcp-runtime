@@ -3,6 +3,7 @@ import { join, dirname, normalize } from 'path';
 import { existsSync, readFileSync, writeFileSync, copyFileSync, unlinkSync, mkdirSync } from 'fs';
 import { spawn, ChildProcess, SpawnOptions } from 'child_process';
 import { createSocket } from 'dgram';
+import { randomBytes } from 'crypto';
 
 // Derive __filename and __dirname in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -85,6 +86,7 @@ export interface GodotProcess {
   totalErrorsWritten: number;
   exitCode: number | null;
   hasExited: boolean;
+  sessionToken: string;
 }
 
 export type RuntimeSessionMode = 'spawned' | 'attached';
@@ -600,9 +602,13 @@ export class GodotRunner {
     }
 
     logDebug(`Running Godot project: ${projectPath}`);
-    const spawnOptions: SpawnOptions = { stdio: 'pipe' };
+    const sessionToken = randomBytes(16).toString('hex');
+    const spawnOptions: SpawnOptions = {
+      stdio: 'pipe',
+      env: { ...process.env, MCP_SESSION_TOKEN: sessionToken },
+    };
     if (background) {
-      spawnOptions.env = { ...process.env, MCP_BACKGROUND: '1' };
+      spawnOptions.env = { ...spawnOptions.env, MCP_BACKGROUND: '1' };
     }
     const proc = spawn(this.godotPath, cmdArgs, spawnOptions);
     const output: string[] = [];
@@ -615,6 +621,7 @@ export class GodotRunner {
       totalErrorsWritten: 0,
       exitCode: null,
       hasExited: false,
+      sessionToken,
     };
 
     proc.stdout?.on('data', (data: Buffer) => {
@@ -926,5 +933,73 @@ export class GodotRunner {
       ? this.extractRuntimeErrors(newErrors)
       : [];
     return { response, runtimeErrors };
+  }
+
+  async waitForBridgeAttached(timeoutMs: number = 15000, intervalMs: number = 500): Promise<{ ready: boolean; error?: string }> {
+    const deadline = Date.now() + timeoutMs;
+    const expectedPath = this.activeProjectPath ? normalize(this.activeProjectPath) + '/' : null;
+
+    while (Date.now() < deadline) {
+      try {
+        const response = await this.sendCommand('ping', {}, 1000);
+        const parsed = JSON.parse(response);
+        if (parsed.status === 'pong') {
+          if (expectedPath && parsed.project_path) {
+            const bridgePath = normalize(parsed.project_path);
+            if (bridgePath !== expectedPath) {
+              return { ready: false, error: `Bridge is running for a different project (${bridgePath}), expected ${expectedPath}` };
+            }
+          }
+          return { ready: true };
+        }
+      } catch {
+        // Expected: ping will fail until bridge is listening
+      }
+
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+
+    return { ready: false, error: 'Bridge did not respond within timeout — is Godot running with the McpBridge autoload?' };
+  }
+
+  async waitForBridge(timeoutMs: number = 8000, intervalMs: number = 300): Promise<{ ready: boolean; error?: string }> {
+    const deadline = Date.now() + timeoutMs;
+    const expectedToken = this.activeProcess?.sessionToken;
+
+    if (!expectedToken) {
+      return { ready: false, error: 'No active spawned Godot process to verify' };
+    }
+
+    while (Date.now() < deadline) {
+      if (this.activeProcess && this.activeProcess.hasExited) {
+        const lastErrors = this.getRecentErrors(20);
+        const errorText = lastErrors.length > 0 ? `\nLast stderr:\n${lastErrors.join('\n')}` : '';
+        return {
+          ready: false,
+          error: `Process exited with code ${this.activeProcess.exitCode} before bridge was ready.${errorText}`,
+        };
+      }
+
+      try {
+        const response = await this.sendCommand('ping', { session_token: expectedToken }, 1000);
+        const parsed = JSON.parse(response);
+        if (parsed.status === 'pong' && parsed.session_token === expectedToken) {
+          return { ready: true };
+        }
+      } catch {
+        // Expected: ping will fail until bridge is listening
+      }
+
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+
+    return { ready: false, error: 'Bridge did not respond with the expected session token within timeout' };
+  }
+
+  getRecentErrors(count: number = 20): string[] {
+    if (!this.activeProcess) return [];
+    return this.activeProcess.errors
+      .slice(-count)
+      .filter(line => line.trim() !== '');
   }
 }
