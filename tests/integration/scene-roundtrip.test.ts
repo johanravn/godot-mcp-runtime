@@ -27,18 +27,16 @@ function makeTmpProject(): string {
   return dst;
 }
 
-// Collect tmp dirs created during this suite for afterAll cleanup
-const tmpDirs: string[] = [];
-
-afterAll(() => {
-  for (const dir of tmpDirs) {
+function cleanup(dirs: string[]) {
+  for (const dir of dirs) {
     try {
       rmSync(dir, { recursive: true, force: true });
     } catch {
       // best-effort cleanup
     }
   }
-});
+  dirs.length = 0;
+}
 
 // --- shared runner ---
 
@@ -52,12 +50,15 @@ beforeAll(async () => {
 // --- tests ---
 
 describe('add_node round-trip', () => {
+  const tmpDirs: string[] = [];
   let tmpProject: string;
 
   beforeEach(() => {
     tmpProject = makeTmpProject();
     tmpDirs.push(tmpProject);
   });
+
+  afterAll(() => cleanup(tmpDirs));
 
   itGodot(
     'get_scene_tree reports the new node after add_node',
@@ -101,12 +102,15 @@ describe('add_node round-trip', () => {
 });
 
 describe('set_node_property round-trip', () => {
+  const tmpDirs: string[] = [];
   let tmpProject: string;
 
   beforeEach(() => {
     tmpProject = makeTmpProject();
     tmpDirs.push(tmpProject);
   });
+
+  afterAll(() => cleanup(tmpDirs));
 
   itGodot(
     'get_node_properties reflects the updated text after set_node_property on Label',
@@ -158,6 +162,7 @@ describe('set_node_property round-trip', () => {
 });
 
 describe('delete_node round-trip', () => {
+  const tmpDirs: string[] = [];
   let tmpProject: string;
 
   beforeEach(() => {
@@ -165,19 +170,13 @@ describe('delete_node round-trip', () => {
     tmpDirs.push(tmpProject);
   });
 
+  afterAll(() => cleanup(tmpDirs));
+
   itGodot(
     'get_scene_tree no longer lists the node after delete_node',
     async () => {
-      // Confirm Sprite2D is there before deletion
-      const { stdout: before } = await runner.executeOperation(
-        'get_scene_tree',
-        { scenePath: 'main.tscn' },
-        tmpProject,
-        30000,
-      );
-      const treeBefore = JSON.parse(extractJson(before));
-      expect(collectNames(treeBefore)).toContain('Sprite2D');
-
+      // Fixture invariant: tests/fixtures/godot-project/main.tscn ships with a Sprite2D
+      // child of the root Node2D — fixture.test.ts guards this shape.
       await runner.executeOperation(
         'delete_node',
         { scenePath: 'main.tscn', nodePath: 'root/Sprite2D' },

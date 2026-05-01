@@ -5,9 +5,9 @@ import { allToolDefinitions, serverInstructions } from '../../src/index.js';
 import { toolDispatch, dispatchToolCall } from '../../src/dispatch.js';
 import type { GodotRunner } from '../../src/utils/godot-runner.js';
 
-// Minimal stub runner — parity tests never invoke handlers,
-// and the unknown-tool test throws before reaching any handler.
-const stubRunner = {} as GodotRunner;
+// Dummy runner — never invoked. Parity tests don't call handlers, and the
+// unknown-tool dispatch path throws before reaching any handler.
+const dummyRunner = {} as GodotRunner;
 
 // ---------------------------------------------------------------------------
 // 1. Tool ↔ handler parity
@@ -34,28 +34,17 @@ describe('tool definition ↔ dispatch parity', () => {
 // ---------------------------------------------------------------------------
 
 describe('unknown tool dispatch', () => {
-  it('rejects with McpError(MethodNotFound) for an unregistered tool name', async () => {
-    await expect(dispatchToolCall(stubRunner, 'no_such_tool', {})).rejects.toThrow(McpError);
+  it('rejects with McpError(MethodNotFound) naming the offending tool', async () => {
+    await expect(dispatchToolCall(dummyRunner, 'no_such_tool', {})).rejects.toMatchObject({
+      code: ErrorCode.MethodNotFound,
+      message: expect.stringContaining('no_such_tool'),
+    });
   });
 
-  it('error code is MethodNotFound', async () => {
-    try {
-      await dispatchToolCall(stubRunner, 'no_such_tool', {});
-      expect.fail('expected dispatchToolCall to throw');
-    } catch (err) {
-      expect(err).toBeInstanceOf(McpError);
-      expect((err as McpError).code).toBe(ErrorCode.MethodNotFound);
-    }
-  });
-
-  it('error message contains the offending tool name', async () => {
-    try {
-      await dispatchToolCall(stubRunner, 'no_such_tool', {});
-      expect.fail('expected dispatchToolCall to throw');
-    } catch (err) {
-      expect(err).toBeInstanceOf(McpError);
-      expect((err as McpError).message).toContain('no_such_tool');
-    }
+  it('throws an instance of McpError', async () => {
+    await expect(dispatchToolCall(dummyRunner, 'no_such_tool', {})).rejects.toBeInstanceOf(
+      McpError,
+    );
   });
 });
 

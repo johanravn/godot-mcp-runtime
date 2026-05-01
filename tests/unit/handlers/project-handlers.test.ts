@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'fs';
+import { describe, it, expect, afterAll } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -20,10 +20,33 @@ import { fixtureProjectPath } from '../../helpers/fixture-paths.js';
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Track every tmp directory the suite creates so afterAll can clean them up.
+// Mirrors the pattern in tests/unit/godot-runner-extended.test.ts.
+const tmpDirs: string[] = [];
+
+afterAll(() => {
+  for (const d of tmpDirs) {
+    try {
+      rmSync(d, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+  }
+  tmpDirs.length = 0;
+});
+
 /** Create a minimal tmp Godot project (project.godot only). */
 function makeTmpProject(): string {
   const dir = mkdtempSync(join(tmpdir(), 'mcp-test-'));
+  tmpDirs.push(dir);
   writeFileSync(join(dir, 'project.godot'), 'config_version=5\n', 'utf8');
+  return dir;
+}
+
+/** Create an empty tmp directory (no project.godot inside). */
+function makeTmpEmptyDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'mcp-empty-'));
+  tmpDirs.push(dir);
   return dir;
 }
 
@@ -405,8 +428,9 @@ describe('handleListProjects', () => {
   });
 
   it('returns a list (possibly empty) for a valid directory', async () => {
-    // Use the OS tmp dir — it exists and has no Godot projects.
-    const result = await handleListProjects({ directory: tmpdir() });
+    // Fresh empty dir — guarantees no ambient Godot projects scanned.
+    const dir = makeTmpEmptyDir();
+    const result = await handleListProjects({ directory: dir });
     expect(hasError(result)).toBe(false);
   });
 
