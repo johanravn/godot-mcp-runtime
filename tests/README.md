@@ -16,12 +16,22 @@ tests/
 
 ## Coverage map
 
-| File                          | Covers                                                                                                                   | Notes                          |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
-| `unit/godot-runner.test.ts`   | `normalizeParameters`, `convertCamelToSnakeCase`, `validatePath`, `extractGdError`, `createErrorResponse`, `extractJson` | First batch from dev-bootstrap |
-| `integration/fixture.test.ts` | Smoke check that `tests/fixtures/godot-project/` is well-formed                                                          | No Godot required              |
+| File                                          | Covers                                                                                                                   | Notes                                    |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
+| `unit/godot-runner.test.ts`                   | `normalizeParameters`, `convertCamelToSnakeCase`, `validatePath`, `extractGdError`, `createErrorResponse`, `extractJson` | First batch from dev-bootstrap           |
+| `unit/godot-runner-extended.test.ts`          | _(planned, helper-coverage)_ `cleanOutput`, `normalizeForCompare`, `validateProjectArgs`, `validateSceneArgs`            |                                          |
+| `unit/tool-definitions.test.ts`               | _(planned, helper-coverage)_ Shape contract for every tool definition; no duplicate names                                |                                          |
+| `unit/handlers/scene-handlers.test.ts`        | _(planned, handler-validation)_ Argument validation in `src/tools/scene-tools.ts` handlers                               | Uses `tests/helpers/fake-runner.ts`      |
+| `unit/handlers/node-handlers.test.ts`         | _(planned, handler-validation)_ Argument validation in `src/tools/node-tools.ts` handlers                                | Uses `tests/helpers/fake-runner.ts`      |
+| `unit/handlers/project-handlers.test.ts`      | _(planned, handler-validation)_ Argument validation for non-runtime project handlers (autoload, fs, search, settings)    | Tmp dirs over `fs` mocking               |
+| `unit/handlers/validate-handler.test.ts`      | _(planned, handler-validation)_ `handleValidate` argument validation incl. single vs `targets[]` mode                    |                                          |
+| `unit/mcp-dispatch.test.ts`                   | _(planned, mcp-protocol)_ Dispatch table ↔ tool-definition parity, unknown-tool error, `instructions` category coverage  |                                          |
+| `integration/runner-executeOperation.test.ts` | _(planned, godot-integration)_ `executeOperation` for `validate` and `get_project_info`                                  | Requires `GODOT_PATH`                    |
+| `integration/scene-roundtrip.test.ts`         | _(planned, godot-integration)_ `add_node` / `set_node_property` / `delete_node` round-trip + auto-save invariant         | Requires `GODOT_PATH`; tmp fixture copy  |
+| `integration/runtime-smoke.test.ts`           | _(planned, godot-integration)_ `run_project` → `take_screenshot` smoke test                                              | Requires `GODOT_PATH`; may skip headless |
+| `integration/fixture.test.ts`                 | Smoke check that `tests/fixtures/godot-project/` is well-formed                                                          | No Godot required                        |
 
-(Add new rows here as test files land.)
+(Workers update their row by removing the _(planned, ...)_ marker when their file lands. Add new rows here as additional test files land.)
 
 ## Running
 
