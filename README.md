@@ -9,7 +9,7 @@
 [![License: MIT](https://badgen.net/github/license/Erodenn/godot-mcp-runtime)](LICENSE)
 [![Node.js](https://img.shields.io/node/v/godot-mcp-runtime)](https://nodejs.org/)
 
-A lightweight [MCP](https://modelcontextprotocol.io/) server that gives AI assistants direct access to a running Godot 4.x game. Not just file editing, not just scene manipulation. Actual runtime control: input simulation, screenshots, UI discovery, and live GDScript execution while the game is running.
+A lightweight [MCP](https://modelcontextprotocol.io/) server that gives AI assistants direct access to a running [Godot](https://godotengine.org/) 4.x game. Not just file editing, not just scene manipulation. Actual runtime control: input simulation, screenshots, UI discovery, and live GDScript execution while the game is running.
 
 **The distinction matters: the AI doesn't just write your game, it can check its work.**
 
