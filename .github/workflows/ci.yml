@@ -38,3 +38,48 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  godot-integration:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        godot-version: ['4.5.1', '4.6.2']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+
+      - run: npm ci
+
+      - name: Cache Godot ${{ matrix.godot-version }}
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: ~/godot-bin
+          key: godot-${{ matrix.godot-version }}-linux-x86_64
+
+      - name: Install Godot ${{ matrix.godot-version }}
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/godot-bin
+          VERSION="${{ matrix.godot-version }}"
+          ZIP_NAME="Godot_v${VERSION}-stable_linux.x86_64.zip"
+          BIN_NAME="Godot_v${VERSION}-stable_linux.x86_64"
+          URL="https://github.com/godotengine/godot-builds/releases/download/${VERSION}-stable/${ZIP_NAME}"
+          curl -fL -o /tmp/godot.zip "$URL"
+          unzip -q /tmp/godot.zip -d ~/godot-bin
+          chmod +x ~/godot-bin/"$BIN_NAME"
+
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Run tests against Godot ${{ matrix.godot-version }}
+        env:
+          GODOT_PATH: /home/runner/godot-bin/Godot_v${{ matrix.godot-version }}-stable_linux.x86_64
+        run: xvfb-run -a npm test
