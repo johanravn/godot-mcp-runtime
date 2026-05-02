@@ -13,19 +13,19 @@ Set `GODOT_PATH` to your Godot 4.x executable for runtime tests and manual exerc
 
 ## Commands
 
-| Command                 | What it does                                            |
-| ----------------------- | ------------------------------------------------------- |
-| `npm run build`         | Compile TypeScript and copy GDScript files into `dist/` |
+| Command                 | What it does                                                                                                               |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `npm run build`         | Compile TypeScript and copy GDScript files into `dist/`                                                                    |
 | `npm run dev`           | Build and launch the MCP server on stdio (needs a connected MCP client; use `npm run build` alone for a compilation check) |
-| `npm run typecheck`     | `tsc --noEmit` — fast type pass, no output              |
-| `npm run lint`          | ESLint over the repo                                    |
-| `npm run lint:fix`      | ESLint with autofix                                     |
-| `npm run format`        | Prettier write                                          |
-| `npm run format:check`  | Prettier check (CI uses this)                           |
-| `npm test`              | Vitest run                                              |
-| `npm run test:watch`    | Vitest watch mode                                       |
-| `npm run test:coverage` | Vitest with v8 coverage                                 |
-| `npm run verify`        | Run everything CI runs, in order, stop on first failure |
+| `npm run typecheck`     | `tsc --noEmit` — fast type pass, no output                                                                                 |
+| `npm run lint`          | ESLint over the repo                                                                                                       |
+| `npm run lint:fix`      | ESLint with autofix                                                                                                        |
+| `npm run format`        | Prettier write                                                                                                             |
+| `npm run format:check`  | Prettier check (CI uses this)                                                                                              |
+| `npm test`              | Vitest run                                                                                                                 |
+| `npm run test:watch`    | Vitest watch mode                                                                                                          |
+| `npm run test:coverage` | Vitest with v8 coverage                                                                                                    |
+| `npm run verify`        | Run everything CI runs, in order, stop on first failure                                                                    |
 
 CI runs typecheck → lint → format:check → test → build on Node 20, 22, 24 for every push and PR to `main`.
 
