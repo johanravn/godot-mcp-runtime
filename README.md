@@ -1,4 +1,5 @@
 # Godot MCP Runtime
+
 <a href="https://glama.ai/mcp/servers/@Erodenn/godot-mcp-runtime">
   <img width="380" height="200" src="https://glama.ai/mcp/servers/@Erodenn/godot-runtime-mcp/badge" alt="godot-runtime-mcp MCP server" />
 </a>
@@ -22,7 +23,6 @@ Think of it as [Playwright MCP](https://github.com/microsoft/playwright-mcp), bu
 This is not a playtesting replacement. It doesn't catch the subtle feel issues that only a human notices, and it won't tell you if your game is fun. What it does is let an agent confirm that a scene loads, a button responds, a value updated, a script ran without errors. The ability to check work is crucial for AI driven workflows.
 
 Each tool teaches agents how to use it through its description and response messages: what to call next, when to wait, and how to recover from errors. Every operation is its own tool with only its relevant parameters, no operation discriminators and no conditional schemas. This server is built for agents.
-
 
 ## What It Does
 
