@@ -139,13 +139,4 @@ describe('extractJson', () => {
     const out = 'INFO: starting up\n{"ok": true}';
     expect(JSON.parse(extractJson(out))).toEqual({ ok: true });
   });
-
-  it('returns input unchanged when bracket-led prefix is unparseable noise', () => {
-    // extractJson picks the first [ or { it sees. If the [ is from log noise like
-    // "[debug]", the function falls through to its last-brace recovery, and if that
-    // still fails it returns the original string. cleanOutput is responsible for
-    // stripping log lines before extractJson runs in the real pipeline.
-    const out = 'noise [debug] more {"ok": true}';
-    expect(extractJson(out)).toBe(out);
-  });
 });

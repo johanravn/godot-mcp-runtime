@@ -16,12 +16,22 @@ tests/
 
 ## Coverage map
 
-| File                          | Covers                                                                                                                   | Notes                          |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------ |
-| `unit/godot-runner.test.ts`   | `normalizeParameters`, `convertCamelToSnakeCase`, `validatePath`, `extractGdError`, `createErrorResponse`, `extractJson` | First batch from dev-bootstrap |
-| `integration/fixture.test.ts` | Smoke check that `tests/fixtures/godot-project/` is well-formed                                                          | No Godot required              |
+| File                                          | Covers                                                                                                                   | Notes                                    |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
+| `unit/godot-runner.test.ts`                   | `normalizeParameters`, `convertCamelToSnakeCase`, `validatePath`, `extractGdError`, `createErrorResponse`, `extractJson` | First batch from dev-bootstrap           |
+| `unit/godot-runner-extended.test.ts`          | `cleanOutput`, `normalizeForCompare`, `validateProjectArgs`, `validateSceneArgs`                                         |                                          |
+| `unit/tool-definitions.test.ts`               | Shape contract for every tool definition; no duplicate names                                                             |                                          |
+| `unit/handlers/scene-handlers.test.ts`        | Argument validation in `src/tools/scene-tools.ts` handlers                                                               | Uses `tests/helpers/fake-runner.ts`      |
+| `unit/handlers/node-handlers.test.ts`         | Argument validation in `src/tools/node-tools.ts` handlers                                                                | Uses `tests/helpers/fake-runner.ts`      |
+| `unit/handlers/project-handlers.test.ts`      | Argument validation for non-runtime project handlers (autoload, fs, search, settings)                                    | Tmp dirs via `fs.mkdtempSync`            |
+| `unit/handlers/validate-handler.test.ts`      | `handleValidate` argument validation incl. single vs `targets[]` mode                                                    |                                          |
+| `unit/mcp-dispatch.test.ts`                   | Dispatch table ↔ tool-definition parity, unknown-tool error, `instructions` category coverage                            |                                          |
+| `integration/runner-executeOperation.test.ts` | `executeOperation` for `validate_resource` (scene + broken GDScript); `handleGetProjectInfo`                             | Requires `GODOT_PATH`                    |
+| `integration/scene-roundtrip.test.ts`         | `add_node` / `set_node_property` / `delete_node` round-trip + auto-save invariant (all 3 operations)                     | Requires `GODOT_PATH`; tmp fixture copy  |
+| `integration/runtime-smoke.test.ts`           | `run_project` → `take_screenshot` smoke test; skips gracefully if no display server                                      | Requires `GODOT_PATH`; may skip headless |
+| `integration/fixture.test.ts`                 | Smoke check that `tests/fixtures/godot-project/` is well-formed                                                          | No Godot required                        |
 
-(Add new rows here as test files land.)
+(Add new rows here as additional test files land.)
 
 ## Running
 
@@ -50,6 +60,10 @@ CI does not install Godot, so those tests skip there. This is intentional — ru
 Use a sibling directory under `tests/fixtures/` rather than mutating an existing fixture in place. Existing tests may depend on the current shape.
 
 If the fixture exercises tools that require Godot, add a row to the coverage map noting it requires `GODOT_PATH`.
+
+## Gotchas worth knowing before debugging a test
+
+- **`root/...` is a virtual path prefix, not the fixture's actual root node name.** The committed fixture's root node is `[node name="Main"]`, but tests address it as `root/Label`, `root/Sprite2D`, etc. The bridge in `src/scripts/godot_operations.gd::find_node_by_path` translates `root` → the actual scene root regardless of its name. Don't go hunting in the `.tscn` for a node literally called `root`.
 
 ## Testing rubric
 
