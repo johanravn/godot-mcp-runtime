@@ -19,7 +19,10 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "verify": "bash scripts/verify.sh"
+    "verify": "bash scripts/verify.sh",
+    "safe-install": "node scripts/safe-install.js",
+    "snapshot-cross-platform-deps": "node scripts/snapshot-cross-platform-deps.js",
+    "install-hooks": "node scripts/install-hooks.js"
   },
   "keywords": [
     "mcp",
