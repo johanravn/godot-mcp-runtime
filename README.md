@@ -30,7 +30,7 @@ Each tool teaches agents how to use it through its description and response mess
 
 **Runtime bridge.** When `run_project` or `attach_project` is called, the server injects `McpBridge` as an autoload. This opens a UDP channel on port 9900 (localhost only) and enables:
 
-- **Screenshots:** Capture the viewport at any point during gameplay
+- **Screenshots:** Capture the viewport at any point during gameplay, with full, preview, or path-only responses
 - **Input simulation:** Batched sequences of key presses, mouse clicks, mouse motion, UI element clicks by name or path, Godot action events, and timed waits
 - **UI discovery:** Walk the live scene tree and collect every visible Control node with its position, type, text content, and disabled state
 - **Live script execution:** Compile and run arbitrary GDScript with full SceneTree access while the game is running
@@ -137,12 +137,12 @@ Ask your AI assistant to call `get_project_info`. If it returns a Godot version 
 
 After `run_project`, or after `attach_project` plus launching Godot manually, wait 2-3 seconds for the bridge to initialize before using these tools.
 
-| Tool              | Description                                                      |
-| ----------------- | ---------------------------------------------------------------- |
-| `take_screenshot` | Capture a PNG of the running viewport                            |
-| `simulate_input`  | Send batched input: key, mouse, click_element, action, wait      |
-| `get_ui_elements` | Get all visible Control nodes with positions, types, and text    |
-| `run_script`      | Execute arbitrary GDScript at runtime with full SceneTree access |
+| Tool              | Description                                                                                        |
+| ----------------- | -------------------------------------------------------------------------------------------------- |
+| `take_screenshot` | Capture a PNG of the running viewport; use `responseMode: "preview"` for token-sensitive workflows |
+| `simulate_input`  | Send batched input: key, mouse, click_element, action, wait                                        |
+| `get_ui_elements` | Get all visible Control nodes with positions, types, and text                                      |
+| `run_script`      | Execute arbitrary GDScript at runtime with full SceneTree access                                   |
 
 ### Scene Editing (headless)
 
@@ -231,6 +231,28 @@ When `run_project` or `attach_project` is called:
 5. `stop_project` or `detach_project` removes the bridge script and autoload entry
 
 Files generated during runtime (screenshots, executed scripts) are stored in `.mcp/` inside the project directory. This directory is automatically added to `.gitignore` and has a `.gdignore` so Godot won't import it.
+
+`take_screenshot` defaults to returning the full PNG inline for compatibility. Pass `responseMode: "preview"` to keep the full screenshot on disk while returning a smaller inline preview, or `responseMode: "path_only"` when the caller only needs the saved file path.
+
+Choose the smallest screenshot response that fits the task:
+
+- Use `responseMode: "preview"` for routine visual verification after input, scene changes, or live scripts. This keeps the original full-size PNG on disk and returns a 960x540-bounded preview inline by default.
+- Use `responseMode: "full"` when the agent needs to inspect exact pixels, small UI text, texture details, or other high-resolution evidence inline.
+- Use `responseMode: "path_only"` when another tool, script, or human will inspect the saved screenshot file and the MCP response only needs the path metadata.
+
+Examples:
+
+```json
+{ "responseMode": "preview" }
+```
+
+```json
+{ "responseMode": "preview", "previewMaxWidth": 480, "previewMaxHeight": 270 }
+```
+
+```json
+{ "responseMode": "path_only" }
+```
 
 ## Acknowledgments
 

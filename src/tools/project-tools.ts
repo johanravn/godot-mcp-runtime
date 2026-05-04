@@ -10,6 +10,21 @@ import {
 } from '../utils/godot-runner.js';
 
 const MAX_RUNTIME_ERROR_CONTEXT_LINES = 30;
+const SCREENSHOT_RESPONSE_MODES = ['full', 'preview', 'path_only'] as const;
+const DEFAULT_PREVIEW_MAX_WIDTH = 960;
+const DEFAULT_PREVIEW_MAX_HEIGHT = 540;
+
+type ScreenshotResponseMode = (typeof SCREENSHOT_RESPONSE_MODES)[number];
+
+interface ScreenshotBridgeResponse {
+  path?: string;
+  preview_path?: string;
+  width?: number;
+  height?: number;
+  preview_width?: number;
+  preview_height?: number;
+  error?: string;
+}
 
 // --- Autoload / project.godot helpers (no Godot process needed) ---
 
@@ -268,7 +283,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
   {
     name: 'take_screenshot',
     description:
-      'Capture a PNG screenshot of the running Godot viewport. Use after simulate_input or run_script to verify visual changes. Requires an active runtime session (run_project or attach_project). Returns the image inline as base64. Also saved to .mcp/screenshots/ in the project directory for later reference. Errors if no session is active or the bridge does not respond within timeout (default 10000ms).',
+      'Capture a PNG screenshot of the running Godot viewport. Requires an active runtime session. responseMode defaults full (current behavior: full inline PNG); preview saves the original but returns a 960x540-bounded preview inline; path_only returns metadata only. Screenshots are saved under .mcp/screenshots. Errors if no session is active or the bridge times out.',
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
@@ -276,6 +291,22 @@ export const projectToolDefinitions: ToolDefinition[] = [
         timeout: {
           type: 'number',
           description: 'Timeout in milliseconds to wait for the screenshot (default: 10000)',
+        },
+        responseMode: {
+          type: 'string',
+          enum: ['full', 'preview', 'path_only'],
+          description:
+            'Response payload mode. "full" returns the full inline PNG (default). "preview" returns a bounded preview inline plus paths. "path_only" returns paths only.',
+        },
+        previewMaxWidth: {
+          type: 'number',
+          description:
+            'Maximum preview width in pixels when responseMode is "preview" (default: 960)',
+        },
+        previewMaxHeight: {
+          type: 'number',
+          description:
+            'Maximum preview height in pixels when responseMode is "preview" (default: 540)',
         },
       },
       required: [],
@@ -1098,6 +1129,24 @@ export async function handleGetProjectInfo(runner: GodotRunner, args: OperationP
   }
 }
 
+function parseScreenshotResponseMode(value: unknown): ScreenshotResponseMode | null {
+  if (value === undefined) return 'full';
+  if (typeof value !== 'string') return null;
+  return SCREENSHOT_RESPONSE_MODES.includes(value as ScreenshotResponseMode)
+    ? (value as ScreenshotResponseMode)
+    : null;
+}
+
+function parsePreviewDimension(value: unknown, fallback: number): number | null {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return null;
+  return Math.max(1, Math.floor(value));
+}
+
+function normalizeScreenshotPath(path: string): string {
+  return sep === '\\' ? path.replace(/\//g, '\\') : path;
+}
+
 export async function handleTakeScreenshot(runner: GodotRunner, args: OperationParams) {
   args = normalizeParameters(args);
 
@@ -1107,15 +1156,35 @@ export async function handleTakeScreenshot(runner: GodotRunner, args: OperationP
   }
 
   const timeout = typeof args.timeout === 'number' ? args.timeout : 10000;
+  const responseMode = parseScreenshotResponseMode(args.responseMode);
+  if (responseMode === null) {
+    return createErrorResponse('Invalid responseMode for take_screenshot', [
+      'Use one of: "full", "preview", or "path_only"',
+    ]);
+  }
+
+  const previewMaxWidth = parsePreviewDimension(args.previewMaxWidth, DEFAULT_PREVIEW_MAX_WIDTH);
+  const previewMaxHeight = parsePreviewDimension(args.previewMaxHeight, DEFAULT_PREVIEW_MAX_HEIGHT);
+  if (previewMaxWidth === null || previewMaxHeight === null) {
+    return createErrorResponse('Invalid preview dimensions for take_screenshot', [
+      'previewMaxWidth and previewMaxHeight must be positive numbers',
+    ]);
+  }
+
+  const commandParams: Record<string, unknown> = {};
+  if (responseMode === 'preview') {
+    commandParams.previewMaxWidth = previewMaxWidth;
+    commandParams.previewMaxHeight = previewMaxHeight;
+  }
 
   try {
     const { response: responseStr, runtimeErrors } = await runner.sendCommandWithErrors(
       'screenshot',
-      {},
+      commandParams,
       timeout,
     );
 
-    let parsed: { path?: string; error?: string };
+    let parsed: ScreenshotBridgeResponse;
     try {
       parsed = JSON.parse(responseStr);
     } catch {
@@ -1139,7 +1208,7 @@ export async function handleTakeScreenshot(runner: GodotRunner, args: OperationP
     }
 
     // Normalize path for the local filesystem (forward slashes from GDScript)
-    const screenshotPath = sep === '\\' ? parsed.path.replace(/\//g, '\\') : parsed.path;
+    const screenshotPath = normalizeScreenshotPath(parsed.path);
 
     if (!existsSync(screenshotPath)) {
       return createErrorResponse(`Screenshot file not found at: ${screenshotPath}`, [
@@ -1148,20 +1217,51 @@ export async function handleTakeScreenshot(runner: GodotRunner, args: OperationP
       ]);
     }
 
-    const imageBuffer = readFileSync(screenshotPath);
-    const base64Data = imageBuffer.toString('base64');
+    const metadata: Record<string, unknown> = {
+      responseMode,
+      path: parsed.path,
+    };
+    if (typeof parsed.width === 'number' && typeof parsed.height === 'number') {
+      metadata.size = { width: parsed.width, height: parsed.height };
+    }
 
-    const content: Array<{ type: string; [key: string]: unknown }> = [
-      {
+    const content: Array<{ type: string; [key: string]: unknown }> = [];
+
+    if (responseMode === 'full') {
+      const imageBuffer = readFileSync(screenshotPath);
+      content.push({
         type: 'image',
-        data: base64Data,
+        data: imageBuffer.toString('base64'),
         mimeType: 'image/png',
-      },
-      {
-        type: 'text',
-        text: `Screenshot saved to: ${parsed.path}`,
-      },
-    ];
+      });
+    } else if (responseMode === 'preview') {
+      if (!parsed.preview_path) {
+        return createErrorResponse('Screenshot server returned no preview path', [
+          'Ensure the running project has the current McpBridge autoload',
+          'Restart the runtime after rebuilding the MCP server',
+        ]);
+      }
+      const previewPath = normalizeScreenshotPath(parsed.preview_path);
+      if (!existsSync(previewPath)) {
+        return createErrorResponse(`Screenshot preview file not found at: ${previewPath}`, [
+          'The preview may have failed to save',
+          'Try again, or use responseMode "full" to return the original screenshot',
+        ]);
+      }
+      const previewBuffer = readFileSync(previewPath);
+      content.push({
+        type: 'image',
+        data: previewBuffer.toString('base64'),
+        mimeType: 'image/png',
+      });
+      metadata.previewPath = parsed.preview_path;
+      if (typeof parsed.preview_width === 'number' && typeof parsed.preview_height === 'number') {
+        metadata.previewSize = { width: parsed.preview_width, height: parsed.preview_height };
+      }
+    }
+
+    content.push({ type: 'text', text: `Screenshot saved to: ${parsed.path}` });
+    content.push({ type: 'text', text: JSON.stringify(metadata) });
 
     if (runtimeErrors.length > 0) {
       content.push({

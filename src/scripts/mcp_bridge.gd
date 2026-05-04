@@ -72,7 +72,7 @@ func _handle_json_command(peer: PacketPeerUDP, data: String) -> void:
 		"run_script":
 			_handle_run_script(peer, payload)
 		"screenshot":
-			_handle_screenshot(peer)
+			_handle_screenshot(peer, payload)
 		"ping":
 			_send_response(peer, {"status": "pong", "session_token": session_token, "project_path": ProjectSettings.globalize_path("res://")})
 		_:
@@ -80,7 +80,7 @@ func _handle_json_command(peer: PacketPeerUDP, data: String) -> void:
 
 # --- Screenshot ---
 
-func _handle_screenshot(peer: PacketPeerUDP) -> void:
+func _handle_screenshot(peer: PacketPeerUDP, payload: Dictionary = {}) -> void:
 	await RenderingServer.frame_post_draw
 
 	var viewport := get_viewport()
@@ -104,7 +104,36 @@ func _handle_screenshot(peer: PacketPeerUDP) -> void:
 		return
 
 	var safe_path := file_path.replace("\\", "/")
-	_send_response(peer, {"path": safe_path})
+	var response: Dictionary = {
+		"path": safe_path,
+		"width": image.get_width(),
+		"height": image.get_height(),
+	}
+
+	var preview_max_width: int = int(payload.get("preview_max_width", 0))
+	var preview_max_height: int = int(payload.get("preview_max_height", 0))
+	if preview_max_width > 0 and preview_max_height > 0:
+		var scale: float = min(
+			1.0,
+			min(
+				float(preview_max_width) / float(image.get_width()),
+				float(preview_max_height) / float(image.get_height())
+			)
+		)
+		var preview_width: int = max(1, int(floor(float(image.get_width()) * scale)))
+		var preview_height: int = max(1, int(floor(float(image.get_height()) * scale)))
+		var preview: Image = image.duplicate()
+		preview.resize(preview_width, preview_height, Image.INTERPOLATE_LANCZOS)
+		var preview_path: String = screenshot_dir.path_join("screenshot_%s_preview.png" % timestamp)
+		var preview_err: Error = preview.save_png(preview_path)
+		if preview_err != OK:
+			_send_response(peer, {"error": "Failed to save screenshot preview (error %d)" % preview_err})
+			return
+		response["preview_path"] = preview_path.replace("\\", "/")
+		response["preview_width"] = preview_width
+		response["preview_height"] = preview_height
+
+	_send_response(peer, response)
 
 # --- Input Simulation ---
 

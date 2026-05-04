@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import {
+  handleTakeScreenshot,
   handleListAutoloads,
   handleAddAutoload,
   handleRemoveAutoload,
@@ -12,6 +13,7 @@ import {
   handleGetProjectSettings,
   handleListProjects,
 } from '../../../src/tools/project-tools.js';
+import type { GodotRunner } from '../../../src/utils/godot-runner.js';
 import { hasError, expectErrorMatching } from '../../helpers/assertions.js';
 import { fixtureProjectPath } from '../../helpers/fixture-paths.js';
 import { useTmpDirs } from '../../helpers/tmp.js';
@@ -21,6 +23,8 @@ import { useTmpDirs } from '../../helpers/tmp.js';
 // ---------------------------------------------------------------------------
 
 const tmp = useTmpDirs();
+const PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
 /** Create a minimal tmp Godot project (project.godot only). */
 function makeTmpProject(): string {
@@ -39,6 +43,173 @@ function makeTmpProjectWithAutoload(name: string, path: string): string {
   writeFileSync(join(dir, 'project.godot'), content, 'utf8');
   return dir;
 }
+
+function writeTmpPng(name: string): string {
+  const dir = tmp.make('mcp-screenshot-');
+  const path = join(dir, name);
+  writeFileSync(path, Buffer.from(PNG_BASE64, 'base64'));
+  return path;
+}
+
+function createRuntimeRunner(response: Record<string, unknown>) {
+  const calls: Array<{ command: string; params: Record<string, unknown>; timeoutMs?: number }> = [];
+  const runner = {
+    activeSessionMode: 'spawned',
+    activeProjectPath: fixtureProjectPath,
+    activeProcess: { hasExited: false },
+    async sendCommandWithErrors(
+      command: string,
+      params: Record<string, unknown> = {},
+      timeoutMs?: number,
+    ) {
+      calls.push({ command, params, timeoutMs });
+      return { response: JSON.stringify(response), runtimeErrors: [] };
+    },
+  } as unknown as GodotRunner;
+
+  return { runner, calls };
+}
+
+// ---------------------------------------------------------------------------
+// handleTakeScreenshot
+// ---------------------------------------------------------------------------
+
+describe('handleTakeScreenshot', () => {
+  it('returns the full inline PNG by default', async () => {
+    const screenshotPath = writeTmpPng('screenshot.png');
+    const { runner, calls } = createRuntimeRunner({ path: screenshotPath });
+
+    const result = await handleTakeScreenshot(runner, {});
+
+    expect(hasError(result)).toBe(false);
+    expect(calls).toEqual([{ command: 'screenshot', params: {}, timeoutMs: 10000 }]);
+    const content = (result as { content: Array<{ type: string; text?: string }> }).content;
+    expect(content[0].type).toBe('image');
+    expect(content[1].text).toBe(`Screenshot saved to: ${screenshotPath}`);
+    const metadata = JSON.parse(content[2].text as string);
+    expect(metadata).toMatchObject({ responseMode: 'full', path: screenshotPath });
+  });
+
+  it('returns the full inline PNG when responseMode is full', async () => {
+    const screenshotPath = writeTmpPng('screenshot.png');
+    const { runner, calls } = createRuntimeRunner({
+      path: screenshotPath,
+      width: 1920,
+      height: 1080,
+    });
+
+    const result = await handleTakeScreenshot(runner, { responseMode: 'full' });
+
+    expect(hasError(result)).toBe(false);
+    expect(calls[0].params).toEqual({});
+    const content = (result as { content: Array<{ type: string; text?: string }> }).content;
+    expect(content[0].type).toBe('image');
+    const metadata = JSON.parse(content[2].text as string);
+    expect(metadata).toMatchObject({
+      responseMode: 'full',
+      path: screenshotPath,
+      size: { width: 1920, height: 1080 },
+    });
+  });
+
+  it('returns a preview image plus path metadata in preview mode', async () => {
+    const screenshotPath = writeTmpPng('screenshot.png');
+    const previewPath = writeTmpPng('screenshot_preview.png');
+    const { runner, calls } = createRuntimeRunner({
+      path: screenshotPath,
+      preview_path: previewPath,
+      width: 3840,
+      height: 2160,
+      preview_width: 960,
+      preview_height: 540,
+    });
+
+    const result = await handleTakeScreenshot(runner, {
+      responseMode: 'preview',
+      previewMaxWidth: 960,
+      previewMaxHeight: 540,
+    });
+
+    expect(hasError(result)).toBe(false);
+    expect(calls).toEqual([
+      {
+        command: 'screenshot',
+        params: { previewMaxWidth: 960, previewMaxHeight: 540 },
+        timeoutMs: 10000,
+      },
+    ]);
+    const content = (result as { content: Array<{ type: string; text?: string }> }).content;
+    expect(content[0].type).toBe('image');
+    const metadata = JSON.parse(content[2].text as string);
+    expect(metadata).toMatchObject({
+      responseMode: 'preview',
+      path: screenshotPath,
+      previewPath,
+      size: { width: 3840, height: 2160 },
+      previewSize: { width: 960, height: 540 },
+    });
+  });
+
+  it('uses default preview dimensions when not specified', async () => {
+    const screenshotPath = writeTmpPng('screenshot.png');
+    const previewPath = writeTmpPng('screenshot_preview.png');
+    const { runner, calls } = createRuntimeRunner({
+      path: screenshotPath,
+      preview_path: previewPath,
+      width: 1920,
+      height: 1080,
+      preview_width: 960,
+      preview_height: 540,
+    });
+
+    const result = await handleTakeScreenshot(runner, { responseMode: 'preview' });
+
+    expect(hasError(result)).toBe(false);
+    expect(calls[0].params).toEqual({ previewMaxWidth: 960, previewMaxHeight: 540 });
+  });
+
+  it('returns metadata only in path_only mode', async () => {
+    const screenshotPath = writeTmpPng('screenshot.png');
+    const { runner } = createRuntimeRunner({ path: screenshotPath });
+
+    const result = await handleTakeScreenshot(runner, { responseMode: 'path_only' });
+
+    expect(hasError(result)).toBe(false);
+    const content = (result as { content: Array<{ type: string; text?: string }> }).content;
+    expect(content.some((item) => item.type === 'image')).toBe(false);
+    const metadata = JSON.parse(content[1].text as string);
+    expect(metadata).toMatchObject({ responseMode: 'path_only', path: screenshotPath });
+  });
+
+  it('rejects invalid responseMode', async () => {
+    const { runner } = createRuntimeRunner({ path: writeTmpPng('screenshot.png') });
+
+    const result = await handleTakeScreenshot(runner, { responseMode: 'small' });
+
+    expectErrorMatching(result, /responseMode/);
+  });
+
+  it('rejects invalid preview dimensions', async () => {
+    const { runner } = createRuntimeRunner({ path: writeTmpPng('screenshot.png') });
+
+    const result = await handleTakeScreenshot(runner, {
+      responseMode: 'preview',
+      previewMaxWidth: 0,
+    });
+
+    expectErrorMatching(result, /preview dimensions/i);
+  });
+
+  it('errors when the screenshot file is missing', async () => {
+    const { runner } = createRuntimeRunner({
+      path: join(tmp.make('mcp-screenshot-'), 'missing.png'),
+    });
+
+    const result = await handleTakeScreenshot(runner, {});
+
+    expectErrorMatching(result, /not found/i);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // handleListAutoloads
