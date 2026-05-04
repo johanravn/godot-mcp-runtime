@@ -1,6 +1,11 @@
 import { join, basename, sep } from 'path';
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import type { GodotRunner, OperationParams, ToolDefinition } from '../utils/godot-runner.js';
+import type {
+  GodotRunner,
+  OperationParams,
+  RuntimeSession,
+  ToolDefinition,
+} from '../utils/godot-runner.js';
 import {
   normalizeParameters,
   validatePath,
@@ -10,6 +15,11 @@ import {
 } from '../utils/godot-runner.js';
 
 const MAX_RUNTIME_ERROR_CONTEXT_LINES = 30;
+const runtimeSessionIdProperty = {
+  type: 'string',
+  description:
+    'Runtime session id returned by run_project or attach_project. Omit only when exactly one runtime session is active.',
+};
 
 // --- Autoload / project.godot helpers (no Godot process needed) ---
 
@@ -148,7 +158,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
   {
     name: 'run_project',
     description:
-      'Spawn a Godot project as a child process with stdout/stderr captured. This is the preferred entry to runtime tools — use whenever MCP can launch the game itself. Required before take_screenshot, simulate_input, get_ui_elements, run_script, or get_debug_output. For a Godot process you launched yourself (debugger attached, custom flags, IDE run), use attach_project instead. Verifies MCP bridge readiness before returning success. Call stop_project when done. Errors if projectPath is not a Godot project or another run is already active.',
+      'Spawn a Godot project as a child process with stdout/stderr captured. This is the preferred entry to runtime tools — use whenever MCP can launch the game itself. Returns a sessionId and bridge endpoint; pass sessionId to runtime tools when more than one runtime session is active. For a Godot process you launched yourself (debugger attached, custom flags, IDE run), use attach_project instead. Verifies MCP bridge readiness before returning success. Call stop_project when done.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -173,7 +183,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
   {
     name: 'attach_project',
     description:
-      'Attach runtime MCP tools to a manually launched Godot process without spawning one. Use this only when the user is running Godot themselves (debugger attached, custom CLI flags, IDE run) — for the standard case, use run_project. Injects the McpBridge autoload and marks the project active. Call once before launching Godot, then again with waitForBridge:true after launch to confirm the bridge is listening (up to 15s). Use detach_project or stop_project when done. get_debug_output is unavailable in attached mode (stdout/stderr not captured).',
+      'Attach runtime MCP tools to a manually launched Godot process without spawning one. Use this only when the user is running Godot themselves (debugger attached, custom CLI flags, IDE run) — for the standard case, use run_project. Injects the McpBridge autoload, writes bridge session metadata under .mcp, and returns a sessionId. Call once before launching Godot, then again with waitForBridge:true after launch to confirm the bridge is listening (up to 15s). Use detach_project or stop_project when done. get_debug_output is unavailable in attached mode (stdout/stderr not captured).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -193,11 +203,13 @@ export const projectToolDefinitions: ToolDefinition[] = [
   {
     name: 'detach_project',
     description:
-      'Clear attached-mode runtime state and remove the injected McpBridge autoload. Does NOT stop the manually launched Godot process — that stays running. Use after attach_project when you are done driving the game from MCP. For spawned sessions (run_project), use stop_project instead. No-op if no attached session exists.',
+      'Clear attached-mode runtime state and remove the injected McpBridge autoload. Does NOT stop the manually launched Godot process — that stays running. Use after attach_project when you are done driving the game from MCP. For spawned sessions (run_project), use stop_project instead. Pass sessionId when multiple runtime sessions are active.',
     annotations: { destructiveHint: true, idempotentHint: true },
     inputSchema: {
       type: 'object',
-      properties: {},
+      properties: {
+        sessionId: runtimeSessionIdProperty,
+      },
       required: [],
     },
   },
@@ -209,6 +221,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
+        sessionId: runtimeSessionIdProperty,
         limit: {
           type: 'number',
           description: 'Max lines to return (default: 200, from end of output)',
@@ -220,8 +233,21 @@ export const projectToolDefinitions: ToolDefinition[] = [
   {
     name: 'stop_project',
     description:
-      'Stop the spawned Godot project and clean up MCP bridge state. Always call when done with runtime testing — even after a crash — to free the single process slot so run_project can be called again. For attached sessions, this detaches without killing the externally launched process. No-op if no session is active.',
+      'Stop a Godot runtime session and clean up MCP bridge state. Always call when done with runtime testing — even after a crash. For attached sessions, this detaches without killing the externally launched process. Pass sessionId when multiple runtime sessions are active.',
     annotations: { destructiveHint: true, idempotentHint: true },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: runtimeSessionIdProperty,
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'list_runtime_sessions',
+    description:
+      'List runtime sessions currently known to this MCP server, including project path, mode, PID when known, bridge endpoint, and sessionId. Use this when runtime tools report that multiple sessions are active.',
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {},
@@ -277,6 +303,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
           type: 'number',
           description: 'Timeout in milliseconds to wait for the screenshot (default: 10000)',
         },
+        sessionId: runtimeSessionIdProperty,
       },
       required: [],
     },
@@ -288,6 +315,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
+        sessionId: runtimeSessionIdProperty,
         actions: {
           type: 'array',
           description:
@@ -371,6 +399,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
+        sessionId: runtimeSessionIdProperty,
         visibleOnly: {
           type: 'boolean',
           description:
@@ -391,6 +420,7 @@ export const projectToolDefinitions: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
+        sessionId: runtimeSessionIdProperty,
         script: {
           type: 'string',
           description:
@@ -554,31 +584,37 @@ export const projectToolDefinitions: ToolDefinition[] = [
   },
 ];
 
-function ensureRuntimeSession(runner: GodotRunner, actionDescription: string) {
-  if (!runner.activeSessionMode || !runner.activeProjectPath) {
+function getSessionId(args: OperationParams): string | undefined {
+  return typeof args.sessionId === 'string' && args.sessionId.trim() !== ''
+    ? args.sessionId
+    : undefined;
+}
+
+function ensureRuntimeSession(
+  runner: GodotRunner,
+  actionDescription: string,
+  sessionId?: string,
+): RuntimeSession | ReturnType<typeof createErrorResponse> {
+  const resolved = runner.resolveRuntimeSession(sessionId);
+  if (!resolved.session) {
     return createErrorResponse(
-      `No active runtime session. A project must be running or attached to ${actionDescription}.`,
+      `${resolved.error || 'No active runtime session.'} A project must be running or attached to ${actionDescription}.`,
       [
         'Use run_project to start a Godot project first',
         'Or use attach_project before launching Godot manually',
+        'If multiple sessions are active, call list_runtime_sessions and pass sessionId',
       ],
     );
   }
 
-  if (
-    runner.activeSessionMode === 'spawned' &&
-    (!runner.activeProcess || runner.activeProcess.hasExited)
-  ) {
-    return createErrorResponse(
-      `The spawned Godot process has exited and cannot ${actionDescription}.`,
-      [
-        'Use get_debug_output to inspect the last captured logs',
-        'Call stop_project to clean up, then run_project again',
-      ],
-    );
+  if (resolved.error) {
+    return createErrorResponse(`${resolved.error} Cannot ${actionDescription}.`, [
+      'Use get_debug_output to inspect the last captured logs',
+      'Call stop_project to clean up, then run_project again',
+    ]);
   }
 
-  return null;
+  return resolved.session;
 }
 
 function findGodotProjects(
@@ -747,12 +783,16 @@ export async function handleRunProject(runner: GodotRunner, args: OperationParam
     }
 
     const background = args.background === true;
-    runner.runProject(args.projectPath as string, args.scene as string | undefined, background);
+    const session = await runner.runProject(
+      args.projectPath as string,
+      args.scene as string | undefined,
+      background,
+    );
 
-    const bridgeResult = await runner.waitForBridge();
+    const bridgeResult = await runner.waitForBridge(session.id);
 
     if (!bridgeResult.ready) {
-      if (runner.activeProcess && runner.activeProcess.hasExited) {
+      if (session.process && session.process.hasExited) {
         return createErrorResponse(
           `Godot process exited before the MCP bridge could initialize.\n${bridgeResult.error || ''}`,
           [
@@ -776,7 +816,7 @@ export async function handleRunProject(runner: GodotRunner, args: OperationParam
       }
       return createErrorResponse(lines.join('\n'), [
         'Use get_debug_output to inspect the last captured logs',
-        'Check that UDP port 9900 is not occupied by another Godot process',
+        `Check that UDP port ${session.bridge.port} is not occupied by another process`,
         'Call stop_project to clean up, then run_project again',
       ]);
     }
@@ -792,7 +832,19 @@ export async function handleRunProject(runner: GodotRunner, args: OperationParam
     }
 
     return {
-      content: [{ type: 'text', text: lines.join('\n') }],
+      content: [
+        { type: 'text', text: lines.join('\n') },
+        {
+          type: 'text',
+          text: JSON.stringify({
+            sessionId: session.id,
+            mode: session.mode,
+            projectPath: session.projectPath,
+            pid: session.pid ?? session.process?.process.pid ?? null,
+            bridge: session.bridge,
+          }),
+        },
+      ],
     };
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -827,18 +879,18 @@ export async function handleAttachProject(runner: GodotRunner, args: OperationPa
       ]);
     }
 
-    runner.attachProject(args.projectPath as string);
+    const session = await runner.attachProject(args.projectPath as string);
 
     if (args.waitForBridge === true) {
-      const bridgeResult = await runner.waitForBridgeAttached();
+      const bridgeResult = await runner.waitForBridgeAttached(session.id);
 
       if (!bridgeResult.ready) {
         return createErrorResponse(
           `Project attached but the MCP bridge is not ready.\n${bridgeResult.error || ''}`,
           [
             'Verify Godot is running with this project',
-            'The McpBridge autoload must be initialized and listening on UDP port 9900',
-            'Check that no other Godot project is occupying port 9900',
+            `The McpBridge autoload must be initialized and listening on UDP port ${session.bridge.port}`,
+            'Check list_runtime_sessions for the expected session metadata',
             'Use detach_project or stop_project when done',
           ],
         );
@@ -851,9 +903,20 @@ export async function handleAttachProject(runner: GodotRunner, args: OperationPa
             text: [
               'Project attached and MCP bridge is ready.',
               '- Runtime tools (take_screenshot, simulate_input, get_ui_elements, run_script) are available now',
+              `- Runtime sessionId: ${session.id}`,
               '- get_debug_output is unavailable in attached mode because MCP did not spawn the process',
               '- Use detach_project or stop_project when done to clean up the injected bridge state',
             ].join('\n'),
+          },
+          {
+            type: 'text',
+            text: JSON.stringify({
+              sessionId: session.id,
+              mode: session.mode,
+              projectPath: session.projectPath,
+              pid: session.pid ?? null,
+              bridge: session.bridge,
+            }),
           },
         ],
       };
@@ -866,10 +929,22 @@ export async function handleAttachProject(runner: GodotRunner, args: OperationPa
           text: [
             'Project attached for manual runtime use.',
             '- Launch Godot yourself, then call attach_project again with waitForBridge: true to confirm readiness',
+            `- Runtime sessionId: ${session.id}`,
+            `- Bridge endpoint: ${session.bridge.host}:${session.bridge.port}`,
             '- Or use runtime tools directly — they will fail with a clear error if the bridge is not yet listening',
             '- get_debug_output is unavailable in attached mode because MCP did not spawn the process',
             '- Use detach_project or stop_project when done to clean up the injected bridge state',
           ].join('\n'),
+        },
+        {
+          type: 'text',
+          text: JSON.stringify({
+            sessionId: session.id,
+            mode: session.mode,
+            projectPath: session.projectPath,
+            pid: session.pid ?? null,
+            bridge: session.bridge,
+          }),
         },
       ],
     };
@@ -882,15 +957,23 @@ export async function handleAttachProject(runner: GodotRunner, args: OperationPa
   }
 }
 
-export function handleDetachProject(runner: GodotRunner) {
-  if (runner.activeSessionMode !== 'attached') {
+export function handleDetachProject(runner: GodotRunner, args: OperationParams = {}) {
+  args = normalizeParameters(args);
+  const resolved = runner.resolveRuntimeSession(getSessionId(args));
+  if (!resolved.session) {
+    return createErrorResponse(resolved.error || 'No attached project to detach.', [
+      'Use attach_project first for manual-launch workflows',
+      'If multiple sessions are active, pass sessionId',
+    ]);
+  }
+  if (resolved.session.mode !== 'attached') {
     return createErrorResponse('No attached project to detach.', [
       'Use attach_project first for manual-launch workflows',
       'If MCP launched the game, use stop_project instead',
     ]);
   }
 
-  const result = runner.stopProject()!;
+  const result = runner.stopProject(resolved.session.id)!;
 
   return {
     content: [
@@ -898,6 +981,9 @@ export function handleDetachProject(runner: GodotRunner) {
         type: 'text',
         text: JSON.stringify({
           message: 'Detached attached project and cleaned MCP bridge state',
+          sessionId: result.sessionId,
+          projectPath: result.projectPath,
+          bridge: result.bridge,
           externalProcessPreserved: result.externalProcessPreserved === true,
         }),
       },
@@ -908,14 +994,17 @@ export function handleDetachProject(runner: GodotRunner) {
 export function handleGetDebugOutput(runner: GodotRunner, args: OperationParams = {}) {
   args = normalizeParameters(args);
 
-  if (!runner.activeSessionMode) {
-    return createErrorResponse('No active runtime session.', [
+  const resolved = runner.resolveRuntimeSession(getSessionId(args));
+  if (!resolved.session) {
+    return createErrorResponse(resolved.error || 'No active runtime session.', [
       'Use run_project to start a Godot project first',
       'Or use attach_project before launching Godot manually',
+      'If multiple sessions are active, pass sessionId',
     ]);
   }
+  const session = resolved.session;
 
-  if (runner.activeSessionMode === 'attached') {
+  if (session.mode === 'attached') {
     return {
       content: [
         {
@@ -925,6 +1014,8 @@ export function handleGetDebugOutput(runner: GodotRunner, args: OperationParams 
             errors: [],
             running: null,
             attached: true,
+            sessionId: session.id,
+            projectPath: session.projectPath,
             tip: 'Attached mode does not capture stdout/stderr because Godot was launched outside MCP.',
           }),
         },
@@ -932,7 +1023,7 @@ export function handleGetDebugOutput(runner: GodotRunner, args: OperationParams 
     };
   }
 
-  const proc = runner.activeProcess;
+  const proc = session.process;
   if (!proc) {
     return createErrorResponse('No active spawned process is available for debug output.', [
       'Use run_project to start a Godot project first',
@@ -945,12 +1036,18 @@ export function handleGetDebugOutput(runner: GodotRunner, args: OperationParams 
     output: string[];
     errors: string[];
     running: boolean;
+    sessionId: string;
+    projectPath: string;
+    pid?: number | null;
     exitCode?: number | null;
     tip?: string;
   } = {
     output: proc.output.slice(-limit),
     errors: proc.errors.slice(-limit),
     running: !proc.hasExited,
+    sessionId: session.id,
+    projectPath: session.projectPath,
+    pid: session.pid ?? proc.process.pid ?? null,
   };
 
   if (proc.hasExited) {
@@ -969,8 +1066,9 @@ export function handleGetDebugOutput(runner: GodotRunner, args: OperationParams 
   };
 }
 
-export function handleStopProject(runner: GodotRunner) {
-  const result = runner.stopProject();
+export function handleStopProject(runner: GodotRunner, args: OperationParams = {}) {
+  args = normalizeParameters(args);
+  const result = runner.stopProject(getSessionId(args));
 
   if (!result) {
     return createErrorResponse('No active Godot process to stop.', [
@@ -988,11 +1086,25 @@ export function handleStopProject(runner: GodotRunner) {
             result.mode === 'attached'
               ? 'Attached project detached and MCP bridge state cleaned up'
               : 'Godot project stopped',
+          sessionId: result.sessionId,
           mode: result.mode,
+          projectPath: result.projectPath,
+          bridge: result.bridge,
           externalProcessPreserved: result.externalProcessPreserved === true,
           finalOutput: result.output.slice(-200),
           finalErrors: result.errors.slice(-200),
         }),
+      },
+    ],
+  };
+}
+
+export function handleListRuntimeSessions(runner: GodotRunner) {
+  return {
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({ sessions: runner.getRuntimeSessionSummaries() }),
       },
     ],
   };
@@ -1101,9 +1213,9 @@ export async function handleGetProjectInfo(runner: GodotRunner, args: OperationP
 export async function handleTakeScreenshot(runner: GodotRunner, args: OperationParams) {
   args = normalizeParameters(args);
 
-  const sessionError = ensureRuntimeSession(runner, 'take a screenshot');
-  if (sessionError) {
-    return sessionError;
+  const session = ensureRuntimeSession(runner, 'take a screenshot', getSessionId(args));
+  if ('isError' in session) {
+    return session;
   }
 
   const timeout = typeof args.timeout === 'number' ? args.timeout : 10000;
@@ -1113,6 +1225,7 @@ export async function handleTakeScreenshot(runner: GodotRunner, args: OperationP
       'screenshot',
       {},
       timeout,
+      session.id,
     );
 
     let parsed: { path?: string; error?: string };
@@ -1178,7 +1291,7 @@ export async function handleTakeScreenshot(runner: GodotRunner, args: OperationP
     return createErrorResponse(`Failed to take screenshot: ${errorMessage}`, [
       'Ensure the project is running (use run_project first)',
       'The bridge may not be ready yet — use get_debug_output to investigate',
-      'Check that UDP port 9900 is not blocked',
+      `Check that UDP port ${session.bridge.port} is not blocked`,
     ]);
   }
 }
@@ -1186,9 +1299,9 @@ export async function handleTakeScreenshot(runner: GodotRunner, args: OperationP
 export async function handleSimulateInput(runner: GodotRunner, args: OperationParams) {
   args = normalizeParameters(args);
 
-  const sessionError = ensureRuntimeSession(runner, 'simulate input');
-  if (sessionError) {
-    return sessionError;
+  const session = ensureRuntimeSession(runner, 'simulate input', getSessionId(args));
+  if ('isError' in session) {
+    return session;
   }
 
   const actions = args.actions;
@@ -1217,6 +1330,7 @@ export async function handleSimulateInput(runner: GodotRunner, args: OperationPa
       'input',
       { actions },
       timeoutMs,
+      session.id,
     );
 
     let parsed: { success?: boolean; error?: string; actions_processed?: number };
@@ -1258,7 +1372,7 @@ export async function handleSimulateInput(runner: GodotRunner, args: OperationPa
     return createErrorResponse(`Failed to simulate input: ${errorMessage}`, [
       'Ensure the project is running (use run_project first)',
       'The bridge may not be ready yet — use get_debug_output to investigate',
-      'Check that UDP port 9900 is not blocked',
+      `Check that UDP port ${session.bridge.port} is not blocked`,
     ]);
   }
 }
@@ -1266,9 +1380,9 @@ export async function handleSimulateInput(runner: GodotRunner, args: OperationPa
 export async function handleGetUiElements(runner: GodotRunner, args: OperationParams) {
   args = normalizeParameters(args);
 
-  const sessionError = ensureRuntimeSession(runner, 'query UI elements');
-  if (sessionError) {
-    return sessionError;
+  const session = ensureRuntimeSession(runner, 'query UI elements', getSessionId(args));
+  if ('isError' in session) {
+    return session;
   }
 
   const visibleOnly = args.visibleOnly !== false;
@@ -1279,6 +1393,8 @@ export async function handleGetUiElements(runner: GodotRunner, args: OperationPa
     const { response: responseStr, runtimeErrors } = await runner.sendCommandWithErrors(
       'get_ui_elements',
       cmdParams,
+      10000,
+      session.id,
     );
 
     let parsed: { elements?: unknown[]; error?: string };
@@ -1318,7 +1434,7 @@ export async function handleGetUiElements(runner: GodotRunner, args: OperationPa
     return createErrorResponse(`Failed to get UI elements: ${errorMessage}`, [
       'Ensure the project is running (use run_project first)',
       'The bridge may not be ready yet — use get_debug_output to investigate',
-      'Check that UDP port 9900 is not blocked',
+      `Check that UDP port ${session.bridge.port} is not blocked`,
     ]);
   }
 }
@@ -1326,9 +1442,9 @@ export async function handleGetUiElements(runner: GodotRunner, args: OperationPa
 export async function handleRunScript(runner: GodotRunner, args: OperationParams) {
   args = normalizeParameters(args);
 
-  const sessionError = ensureRuntimeSession(runner, 'execute scripts');
-  if (sessionError) {
-    return sessionError;
+  const session = ensureRuntimeSession(runner, 'execute scripts', getSessionId(args));
+  if ('isError' in session) {
+    return session;
   }
 
   const script = args.script;
@@ -1347,15 +1463,12 @@ export async function handleRunScript(runner: GodotRunner, args: OperationParams
 
   // Write script to .mcp/scripts/ for audit trail
   try {
-    const projectPath = runner.activeProjectPath;
-    if (projectPath) {
-      const scriptsDir = join(projectPath, '.mcp', 'scripts');
-      mkdirSync(scriptsDir, { recursive: true });
-      const timestamp = Date.now();
-      const scriptFile = join(scriptsDir, `${timestamp}.gd`);
-      writeFileSync(scriptFile, script, 'utf8');
-      logDebug(`Saved script to ${scriptFile}`);
-    }
+    const scriptsDir = join(session.projectPath, '.mcp', 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    const timestamp = Date.now();
+    const scriptFile = join(scriptsDir, `${timestamp}.gd`);
+    writeFileSync(scriptFile, script, 'utf8');
+    logDebug(`Saved script to ${scriptFile}`);
   } catch (error) {
     logDebug(`Failed to save script for audit: ${error}`);
   }
@@ -1367,6 +1480,7 @@ export async function handleRunScript(runner: GodotRunner, args: OperationParams
       'run_script',
       { source: script },
       timeout,
+      session.id,
     );
 
     let parsed: { success?: boolean; result?: unknown; error?: string };
@@ -1389,7 +1503,7 @@ export async function handleRunScript(runner: GodotRunner, args: OperationParams
 
     // Detect false-positive success: GDScript has no try-catch, so runtime errors
     // return null and the real error only appears in stderr.
-    if (parsed.success && parsed.result === null && runner.activeSessionMode === 'spawned') {
+    if (parsed.success && parsed.result === null && session.mode === 'spawned') {
       if (runtimeErrors.length > 0) {
         const errorContext = runtimeErrors.slice(0, MAX_RUNTIME_ERROR_CONTEXT_LINES).join('\n');
         return createErrorResponse(`Script runtime error detected:\n${errorContext}`, [
@@ -1436,7 +1550,7 @@ export async function handleRunScript(runner: GodotRunner, args: OperationParams
     return createErrorResponse(`Failed to execute script: ${errorMessage}`, [
       'Ensure the project is running (use run_project first)',
       'The bridge may not be ready yet — wait 2-3 seconds after starting, then check get_debug_output if the issue persists',
-      'Check that UDP port 9900 is not blocked',
+      `Check that UDP port ${session.bridge.port} is not blocked`,
       'For long-running scripts, increase the timeout parameter',
     ]);
   }

@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import { createSocket } from 'dgram';
+import type { Socket } from 'dgram';
 import {
   cleanOutput,
+  GodotRunner,
   normalizeForCompare,
   validateProjectArgs,
   validateSceneArgs,
@@ -178,5 +181,76 @@ describe('validateSceneArgs', () => {
     expect('isError' in result).toBe(false);
     const typed = result as { projectPath: string; scenePath: string };
     expect(typed.scenePath).toBe('ghost.tscn');
+  });
+});
+
+// ─── runtime sessions ───────────────────────────────────────────────────────
+
+function startUdpResponder(port: number, label: string): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    const socket = createSocket('udp4');
+    socket.once('error', reject);
+    socket.on('message', (msg, rinfo) => {
+      const parsed = JSON.parse(msg.toString('utf8')) as {
+        command?: string;
+        session_token?: string;
+      };
+      const response = JSON.stringify({
+        label,
+        command: parsed.command,
+        session_token: parsed.session_token,
+      });
+      socket.send(response, rinfo.port, rinfo.address);
+    });
+    socket.bind(port, '127.0.0.1', () => {
+      socket.off('error', reject);
+      resolve(socket);
+    });
+  });
+}
+
+function closeSocket(socket: Socket): Promise<void> {
+  return new Promise((resolve) => socket.close(() => resolve()));
+}
+
+describe('GodotRunner runtime sessions', () => {
+  const tmp = useTmpDirs();
+
+  it('routes UDP commands to the selected runtime session', async () => {
+    const runner = new GodotRunner();
+    const firstProject = tmp.makeProject('mcp-runtime-a-');
+    const secondProject = tmp.makeProject('mcp-runtime-b-');
+    const firstSession = await runner.attachProject(firstProject);
+    const secondSession = await runner.attachProject(secondProject);
+    const sockets: Socket[] = [];
+
+    try {
+      sockets.push(await startUdpResponder(firstSession.bridge.port, 'first'));
+      sockets.push(await startUdpResponder(secondSession.bridge.port, 'second'));
+
+      const firstResponse = JSON.parse(
+        await runner.sendCommand('ping', {}, 1000, firstSession.id),
+      ) as { label: string; session_token: string };
+      const secondResponse = JSON.parse(
+        await runner.sendCommand('ping', {}, 1000, secondSession.id),
+      ) as { label: string; session_token: string };
+
+      expect(firstResponse).toMatchObject({
+        label: 'first',
+        session_token: firstSession.sessionToken,
+      });
+      expect(secondResponse).toMatchObject({
+        label: 'second',
+        session_token: secondSession.sessionToken,
+      });
+      await expect(runner.sendCommand('ping', {}, 1000)).rejects.toThrow(
+        /Multiple runtime sessions/,
+      );
+    } finally {
+      for (const socket of sockets) {
+        await closeSocket(socket);
+      }
+      runner.stopAllProjects();
+    }
   });
 });
