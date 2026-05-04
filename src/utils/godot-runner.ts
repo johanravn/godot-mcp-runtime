@@ -19,6 +19,7 @@ const BRIDGE_WAIT_SPAWNED_INTERVAL_MS = 300;
 const BRIDGE_WAIT_ATTACHED_TIMEOUT_MS = 15000;
 const BRIDGE_WAIT_ATTACHED_INTERVAL_MS = 500;
 const BRIDGE_PING_TIMEOUT_MS = 1000;
+const BRIDGE_HOST = '127.0.0.1';
 
 /**
  * Normalize a path for cross-platform comparison.
@@ -108,8 +109,27 @@ export interface GodotProcess {
 
 export type RuntimeSessionMode = 'spawned' | 'attached';
 
-export interface RuntimeStopResult {
+export interface RuntimeBridgeEndpoint {
+  host: string;
+  port: number;
+}
+
+export interface RuntimeSession {
+  id: string;
   mode: RuntimeSessionMode;
+  projectPath: string;
+  bridge: RuntimeBridgeEndpoint;
+  sessionToken: string;
+  createdAt: number;
+  process?: GodotProcess;
+  pid?: number;
+}
+
+export interface RuntimeStopResult {
+  sessionId: string;
+  mode: RuntimeSessionMode;
+  projectPath: string;
+  bridge: RuntimeBridgeEndpoint;
   output: string[];
   errors: string[];
   externalProcessPreserved?: boolean;
@@ -364,7 +384,9 @@ export class GodotRunner {
   private bridgeScriptPath: string;
   private validatedPaths: Map<string, boolean> = new Map();
   private injectedProjects: Set<string> = new Set();
+  private runtimeSessions: Map<string, RuntimeSession> = new Map();
   private strictPathValidation: boolean;
+  public defaultSessionId: string | null = null;
   public activeProcess: GodotProcess | null = null;
   public activeProjectPath: string | null = null;
   public activeSessionMode: RuntimeSessionMode | null = null;
@@ -638,23 +660,163 @@ export class GodotRunner {
     return spawn(this.godotPath, ['-e', '--path', projectPath], { stdio: 'pipe' });
   }
 
-  runProject(projectPath: string, scene?: string, background: boolean = false): GodotProcess {
+  private createRuntimeSessionId(): string {
+    return `runtime_${Date.now().toString(36)}_${randomBytes(4).toString('hex')}`;
+  }
+
+  private async allocateBridgePort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const socket = createSocket('udp4');
+      socket.once('error', (err) => {
+        socket.close();
+        reject(err);
+      });
+      socket.bind(0, BRIDGE_HOST, () => {
+        const { port } = socket.address() as { port: number };
+        socket.close(() => resolve(port));
+      });
+    });
+  }
+
+  private findSessionByProject(projectPath: string): RuntimeSession | null {
+    const expectedPath = normalizeForCompare(projectPath);
+    for (const session of this.runtimeSessions.values()) {
+      if (normalizeForCompare(session.projectPath) === expectedPath) {
+        return session;
+      }
+    }
+    return null;
+  }
+
+  private isSessionUsable(session: RuntimeSession): boolean {
+    if (session.mode === 'attached') return true;
+    return session.process !== undefined && !session.process.hasExited;
+  }
+
+  private syncLegacyActiveSession(): void {
+    const session = this.defaultSessionId ? this.runtimeSessions.get(this.defaultSessionId) : null;
+    if (!session) {
+      this.defaultSessionId = null;
+      this.activeProcess = null;
+      this.activeProjectPath = null;
+      this.activeSessionMode = null;
+      return;
+    }
+    this.activeProcess = session.process ?? null;
+    this.activeProjectPath = session.projectPath;
+    this.activeSessionMode = session.mode;
+  }
+
+  private setDefaultSession(sessionId: string | null): void {
+    this.defaultSessionId = sessionId;
+    this.syncLegacyActiveSession();
+  }
+
+  private writeBridgeConfig(projectPath: string, session: RuntimeSession): void {
+    const mcpDir = join(projectPath, '.mcp');
+    if (!existsSync(mcpDir)) {
+      mkdirSync(mcpDir, { recursive: true });
+    }
+    writeFileSync(join(mcpDir, '.gdignore'), '', 'utf8');
+    writeFileSync(
+      join(mcpDir, 'bridge_config.json'),
+      JSON.stringify(
+        {
+          host: session.bridge.host,
+          port: session.bridge.port,
+          session_token: session.sessionToken,
+          session_id: session.id,
+        },
+        null,
+        2,
+      ) + '\n',
+      'utf8',
+    );
+  }
+
+  private removeBridgeConfig(projectPath: string): void {
+    const configPath = join(projectPath, '.mcp', 'bridge_config.json');
+    try {
+      if (existsSync(configPath)) {
+        unlinkSync(configPath);
+        logDebug(`Removed bridge config at ${configPath}`);
+      }
+    } catch (err) {
+      logDebug(`Non-fatal: Failed to remove bridge config: ${err}`);
+    }
+  }
+
+  private sessionSummary(session: RuntimeSession): Record<string, unknown> {
+    return {
+      sessionId: session.id,
+      mode: session.mode,
+      projectPath: session.projectPath,
+      pid: session.pid ?? session.process?.process.pid ?? null,
+      bridge: session.bridge,
+      running: this.isSessionUsable(session),
+      createdAt: session.createdAt,
+    };
+  }
+
+  getRuntimeSessionSummaries(): Array<Record<string, unknown>> {
+    return Array.from(this.runtimeSessions.values()).map((session) => this.sessionSummary(session));
+  }
+
+  resolveRuntimeSession(sessionId?: string): { session?: RuntimeSession; error?: string } {
+    if (sessionId) {
+      const session = this.runtimeSessions.get(sessionId);
+      if (!session) {
+        return {
+          error: `No runtime session found for sessionId '${sessionId}'. Active sessions: ${JSON.stringify(this.getRuntimeSessionSummaries())}`,
+        };
+      }
+      if (!this.isSessionUsable(session)) {
+        return {
+          session,
+          error: `Runtime session '${sessionId}' is no longer running.`,
+        };
+      }
+      return { session };
+    }
+
+    const activeSessions = Array.from(this.runtimeSessions.values()).filter((session) =>
+      this.isSessionUsable(session),
+    );
+    if (activeSessions.length === 0) {
+      if (this.runtimeSessions.size === 1) {
+        const session = this.runtimeSessions.values().next().value!;
+        return {
+          session,
+          error: `Runtime session '${session.id}' is no longer running.`,
+        };
+      }
+      return { error: 'No active runtime session.' };
+    }
+    if (activeSessions.length > 1) {
+      return {
+        error: `Multiple runtime sessions are active. Pass sessionId to select one: ${JSON.stringify(activeSessions.map((session) => this.sessionSummary(session)))}`,
+      };
+    }
+    return { session: activeSessions[0] };
+  }
+
+  async runProject(
+    projectPath: string,
+    scene?: string,
+    background: boolean = false,
+  ): Promise<RuntimeSession> {
     if (!this.godotPath) {
       throw new Error('Godot path not set. Call detectGodotPath first.');
     }
 
-    if (this.activeSessionMode === 'spawned' && this.activeProcess) {
-      logDebug('Killing existing Godot process before starting a new one');
-      this.activeProcess.process.kill();
-      if (this.activeProjectPath && this.activeProjectPath !== projectPath) {
-        this.cleanupBridgeAutoload(this.activeProjectPath);
-      }
-    } else if (
-      this.activeSessionMode === 'attached' &&
-      this.activeProjectPath &&
-      this.activeProjectPath !== projectPath
-    ) {
-      this.cleanupBridgeAutoload(this.activeProjectPath);
+    const existingSession = this.findSessionByProject(projectPath);
+    if (existingSession && this.isSessionUsable(existingSession)) {
+      throw new Error(
+        `Project already has active runtime session '${existingSession.id}'. Stop that session before starting another runtime for the same project.`,
+      );
+    }
+    if (existingSession) {
+      this.stopProject(existingSession.id);
     }
 
     try {
@@ -662,8 +824,6 @@ export class GodotRunner {
     } catch (err) {
       logDebug(`Non-fatal: Failed to inject bridge autoload: ${err}`);
     }
-    this.activeProjectPath = projectPath;
-    this.activeSessionMode = 'spawned';
 
     const cmdArgs = ['--path', projectPath];
     if (scene && validatePath(scene)) {
@@ -672,10 +832,16 @@ export class GodotRunner {
     }
 
     logDebug(`Running Godot project: ${projectPath}`);
+    const bridgePort = await this.allocateBridgePort();
     const sessionToken = randomBytes(16).toString('hex');
+    const sessionId = this.createRuntimeSessionId();
     const spawnOptions: SpawnOptions = {
       stdio: 'pipe',
-      env: { ...process.env, MCP_SESSION_TOKEN: sessionToken },
+      env: {
+        ...process.env,
+        MCP_BRIDGE_PORT: String(bridgePort),
+        MCP_SESSION_TOKEN: sessionToken,
+      },
     };
     if (background) {
       spawnOptions.env = { ...spawnOptions.env, MCP_BACKGROUND: '1' };
@@ -693,6 +859,18 @@ export class GodotRunner {
       hasExited: false,
       sessionToken,
     };
+
+    const session: RuntimeSession = {
+      id: sessionId,
+      mode: 'spawned',
+      projectPath,
+      bridge: { host: BRIDGE_HOST, port: bridgePort },
+      sessionToken,
+      createdAt: Date.now(),
+      process: godotProcess,
+      pid: proc.pid,
+    };
+    this.writeBridgeConfig(projectPath, session);
 
     proc.stdout?.on('data', (data: Buffer) => {
       const lines = data.toString().split('\n');
@@ -717,89 +895,121 @@ export class GodotRunner {
       logDebug(`Godot process exited with code ${code}`);
       godotProcess.exitCode = code;
       godotProcess.hasExited = true;
-      // Don't clear activeProcess immediately - keep it so output can be retrieved
+      this.syncLegacyActiveSession();
     });
 
     proc.on('error', (err: Error) => {
       console.error('Failed to start Godot process:', err);
       errors.push(`Process error: ${err.message}`);
       godotProcess.hasExited = true;
+      this.syncLegacyActiveSession();
     });
 
-    this.activeProcess = godotProcess;
-    return this.activeProcess;
+    this.runtimeSessions.set(session.id, session);
+    this.setDefaultSession(session.id);
+    return session;
   }
 
-  attachProject(projectPath: string): void {
-    if (this.activeSessionMode === 'spawned' && this.activeProcess) {
-      this.stopProject();
-    } else if (
-      this.activeSessionMode === 'attached' &&
-      this.activeProjectPath &&
-      this.activeProjectPath !== projectPath
-    ) {
-      this.cleanupBridgeAutoload(this.activeProjectPath);
-      this.activeProjectPath = null;
-      this.activeSessionMode = null;
+  async attachProject(projectPath: string): Promise<RuntimeSession> {
+    const existingSession = this.findSessionByProject(projectPath);
+    if (existingSession && this.isSessionUsable(existingSession)) {
+      this.setDefaultSession(existingSession.id);
+      return existingSession;
+    }
+    if (existingSession) {
+      this.stopProject(existingSession.id);
     }
 
     this.injectBridgeAutoload(projectPath);
-    this.activeProjectPath = projectPath;
-    this.activeSessionMode = 'attached';
-    this.activeProcess = null;
+    const bridgePort = await this.allocateBridgePort();
+    const session: RuntimeSession = {
+      id: this.createRuntimeSessionId(),
+      mode: 'attached',
+      projectPath,
+      bridge: { host: BRIDGE_HOST, port: bridgePort },
+      sessionToken: randomBytes(16).toString('hex'),
+      createdAt: Date.now(),
+    };
+    this.writeBridgeConfig(projectPath, session);
+    this.runtimeSessions.set(session.id, session);
+    this.setDefaultSession(session.id);
+    return session;
   }
 
-  stopProject(): RuntimeStopResult | null {
-    if (!this.activeSessionMode) {
+  stopProject(sessionId?: string): RuntimeStopResult | null {
+    let session: RuntimeSession | undefined;
+    if (sessionId) {
+      // Direct lookup — works even for dead sessions (cleanup after crash).
+      session = this.runtimeSessions.get(sessionId);
+    } else if (this.runtimeSessions.size === 1) {
+      session = this.runtimeSessions.values().next().value!;
+    } else {
+      // Multiple sessions: resolveRuntimeSession picks the sole usable one.
+      const resolved = this.resolveRuntimeSession();
+      session = resolved.session;
+    }
+    if (!session) {
       return null;
     }
 
-    if (this.activeSessionMode === 'attached') {
-      const projectPath = this.activeProjectPath;
-      if (projectPath) {
-        this.cleanupBridgeAutoload(projectPath);
+    if (session.mode === 'attached') {
+      this.cleanupBridgeAutoload(session.projectPath);
+      this.removeBridgeConfig(session.projectPath);
+      this.runtimeSessions.delete(session.id);
+      if (this.defaultSessionId === session.id) {
+        this.setDefaultSession(this.runtimeSessions.keys().next().value ?? null);
+      } else {
+        this.syncLegacyActiveSession();
       }
-      this.activeProjectPath = null;
-      this.activeSessionMode = null;
-      this.activeProcess = null;
       return {
+        sessionId: session.id,
         mode: 'attached',
+        projectPath: session.projectPath,
+        bridge: session.bridge,
         output: [],
         errors: [],
         externalProcessPreserved: true,
       };
     }
 
-    if (!this.activeProcess) {
+    if (!session.process) {
       return null;
     }
 
-    logDebug('Stopping active Godot process');
-    this.activeProcess.process.kill();
+    logDebug(`Stopping Godot process for runtime session ${session.id}`);
+    session.process.process.kill();
     const result: RuntimeStopResult = {
+      sessionId: session.id,
       mode: 'spawned',
-      output: this.activeProcess.output,
-      errors: this.activeProcess.errors,
+      projectPath: session.projectPath,
+      bridge: session.bridge,
+      output: session.process.output,
+      errors: session.process.errors,
     };
-    this.activeProcess = null;
-
-    if (this.activeProjectPath) {
-      this.cleanupBridgeAutoload(this.activeProjectPath);
-      this.activeProjectPath = null;
+    this.cleanupBridgeAutoload(session.projectPath);
+    this.removeBridgeConfig(session.projectPath);
+    this.runtimeSessions.delete(session.id);
+    if (this.defaultSessionId === session.id) {
+      this.setDefaultSession(this.runtimeSessions.keys().next().value ?? null);
+    } else {
+      this.syncLegacyActiveSession();
     }
-    this.activeSessionMode = null;
 
     return result;
   }
 
-  hasActiveRuntimeSession(): boolean {
-    if (!this.activeSessionMode || !this.activeProjectPath) {
-      return false;
+  stopAllProjects(): RuntimeStopResult[] {
+    const results: RuntimeStopResult[] = [];
+    for (const sessionId of Array.from(this.runtimeSessions.keys())) {
+      const result = this.stopProject(sessionId);
+      if (result) results.push(result);
     }
-    if (this.activeSessionMode === 'spawned') {
-      return this.activeProcess !== null && !this.activeProcess.hasExited;
-    }
-    return true;
+    return results;
+  }
+
+  hasActiveRuntimeSession(sessionId?: string): boolean {
+    const resolved = this.resolveRuntimeSession(sessionId);
+    return resolved.session !== undefined && !resolved.error;
   }
 
   private removeAutoloadEntry(
@@ -941,8 +1151,15 @@ export class GodotRunner {
     command: string,
     params: Record<string, unknown> = {},
     timeoutMs: number = 10000,
+    sessionId?: string,
   ): Promise<string> {
     return new Promise((resolve, reject) => {
+      const resolved = this.resolveRuntimeSession(sessionId);
+      if (!resolved.session || resolved.error) {
+        reject(new Error(resolved.error || 'No active runtime session'));
+        return;
+      }
+      const session = resolved.session;
       const socket = createSocket('udp4');
       let settled = false;
 
@@ -974,9 +1191,9 @@ export class GodotRunner {
         }
       });
 
-      const payload = JSON.stringify({ command, ...params });
+      const payload = JSON.stringify({ command, session_token: session.sessionToken, ...params });
       const message = Buffer.from(payload);
-      socket.send(message, 9900, '127.0.0.1', (err) => {
+      socket.send(message, session.bridge.port, session.bridge.host, (err) => {
         if (err && !settled) {
           settled = true;
           clearTimeout(timer);
@@ -988,12 +1205,15 @@ export class GodotRunner {
   }
 
   getErrorCount(): number {
-    return this.activeProcess?.totalErrorsWritten ?? 0;
+    const resolved = this.resolveRuntimeSession();
+    return resolved.session?.process?.totalErrorsWritten ?? 0;
   }
 
-  getErrorsSince(marker: number): string[] {
-    if (!this.activeProcess) return [];
-    const { errors, totalErrorsWritten } = this.activeProcess;
+  getErrorsSince(marker: number, sessionId?: string): string[] {
+    const resolved = this.resolveRuntimeSession(sessionId);
+    const process = resolved.session?.process;
+    if (!process) return [];
+    const { errors, totalErrorsWritten } = process;
     const delta = totalErrorsWritten - marker;
     if (delta <= 0) return [];
     const window = delta >= errors.length ? errors.slice() : errors.slice(errors.length - delta);
@@ -1014,29 +1234,38 @@ export class GodotRunner {
     command: string,
     params: Record<string, unknown> = {},
     timeoutMs: number = 10000,
+    sessionId?: string,
   ): Promise<{ response: string; runtimeErrors: string[] }> {
-    const marker = this.getErrorCount();
-    const response = await this.sendCommand(command, params, timeoutMs);
-    const newErrors = this.getErrorsSince(marker);
-    const runtimeErrors =
-      this.activeSessionMode === 'spawned' ? this.extractRuntimeErrors(newErrors) : [];
+    const resolved = this.resolveRuntimeSession(sessionId);
+    if (!resolved.session) {
+      throw new Error(resolved.error || 'No active runtime session');
+    }
+    const session = resolved.session;
+    const marker = session.process?.totalErrorsWritten ?? 0;
+    const response = await this.sendCommand(command, params, timeoutMs, session.id);
+    const newErrors = this.getErrorsSince(marker, session.id);
+    const runtimeErrors = session.mode === 'spawned' ? this.extractRuntimeErrors(newErrors) : [];
     return { response, runtimeErrors };
   }
 
   async waitForBridgeAttached(
+    sessionId?: string,
     timeoutMs: number = BRIDGE_WAIT_ATTACHED_TIMEOUT_MS,
     intervalMs: number = BRIDGE_WAIT_ATTACHED_INTERVAL_MS,
   ): Promise<{ ready: boolean; error?: string }> {
+    const resolved = this.resolveRuntimeSession(sessionId);
+    if (!resolved.session) {
+      return { ready: false, error: resolved.error || 'No active attached runtime session' };
+    }
+    const session = resolved.session;
     const deadline = Date.now() + timeoutMs;
-    const expectedPath = this.activeProjectPath
-      ? normalizeForCompare(this.activeProjectPath)
-      : null;
+    const expectedPath = normalizeForCompare(session.projectPath);
 
     while (Date.now() < deadline) {
       try {
-        const response = await this.sendCommand('ping', {}, BRIDGE_PING_TIMEOUT_MS);
+        const response = await this.sendCommand('ping', {}, BRIDGE_PING_TIMEOUT_MS, session.id);
         const parsed = JSON.parse(response);
-        if (parsed.status === 'pong') {
+        if (parsed.status === 'pong' && parsed.session_token === session.sessionToken) {
           if (expectedPath && parsed.project_path) {
             const bridgePath = normalizeForCompare(parsed.project_path);
             if (bridgePath !== expectedPath) {
@@ -1045,6 +1274,9 @@ export class GodotRunner {
                 error: `Bridge is running for a different project (${bridgePath}), expected ${expectedPath}`,
               };
             }
+          }
+          if (typeof parsed.pid === 'number') {
+            session.pid = parsed.pid;
           }
           return { ready: true };
         }
@@ -1063,26 +1295,30 @@ export class GodotRunner {
   }
 
   async waitForBridge(
+    sessionId?: string,
     timeoutMs: number = BRIDGE_WAIT_SPAWNED_TIMEOUT_MS,
     intervalMs: number = BRIDGE_WAIT_SPAWNED_INTERVAL_MS,
   ): Promise<{ ready: boolean; error?: string }> {
+    const resolved = this.resolveRuntimeSession(sessionId);
+    if (!resolved.session) {
+      return { ready: false, error: resolved.error || 'No active spawned Godot process to verify' };
+    }
+    const session = resolved.session;
     const deadline = Date.now() + timeoutMs;
-    const expectedToken = this.activeProcess?.sessionToken;
-    const expectedPath = this.activeProjectPath
-      ? normalizeForCompare(this.activeProjectPath)
-      : null;
+    const expectedToken = session.sessionToken;
+    const expectedPath = normalizeForCompare(session.projectPath);
 
-    if (!expectedToken) {
+    if (!session.process || !expectedToken) {
       return { ready: false, error: 'No active spawned Godot process to verify' };
     }
 
     while (Date.now() < deadline) {
-      if (this.activeProcess && this.activeProcess.hasExited) {
-        const lastErrors = this.getRecentErrors(20);
+      if (session.process.hasExited) {
+        const lastErrors = this.getRecentErrors(20, session.id);
         const errorText = lastErrors.length > 0 ? `\nLast stderr:\n${lastErrors.join('\n')}` : '';
         return {
           ready: false,
-          error: `Process exited with code ${this.activeProcess.exitCode} before bridge was ready.${errorText}`,
+          error: `Process exited with code ${session.process.exitCode} before bridge was ready.${errorText}`,
         };
       }
 
@@ -1091,6 +1327,7 @@ export class GodotRunner {
           'ping',
           { session_token: expectedToken },
           BRIDGE_PING_TIMEOUT_MS,
+          session.id,
         );
         const parsed = JSON.parse(response);
         if (parsed.status === 'pong' && parsed.session_token === expectedToken) {
@@ -1102,6 +1339,9 @@ export class GodotRunner {
                 error: `Bridge reports project ${bridgePath}, expected ${expectedPath}`,
               };
             }
+          }
+          if (typeof parsed.pid === 'number') {
+            session.pid = parsed.pid;
           }
           return { ready: true };
         }
@@ -1118,8 +1358,10 @@ export class GodotRunner {
     };
   }
 
-  getRecentErrors(count: number = 20): string[] {
-    if (!this.activeProcess) return [];
-    return this.activeProcess.errors.slice(-count).filter((line) => line.trim() !== '');
+  getRecentErrors(count: number = 20, sessionId?: string): string[] {
+    const resolved = this.resolveRuntimeSession(sessionId);
+    const process = resolved.session?.process;
+    if (!process) return [];
+    return process.errors.slice(-count).filter((line) => line.trim() !== '');
   }
 }

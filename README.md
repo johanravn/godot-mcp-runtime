@@ -28,7 +28,7 @@ Each tool teaches agents how to use it through its description and response mess
 
 **Headless editing.** Create scenes, add nodes, set properties, attach scripts, connect signals, manage UIDs, validate GDScript. All the standard operations, no editor window required.
 
-**Runtime bridge.** When `run_project` or `attach_project` is called, the server injects `McpBridge` as an autoload. This opens a UDP channel on port 9900 (localhost only) and enables:
+**Runtime bridge.** When `run_project` or `attach_project` is called, the server injects `McpBridge` as an autoload. Each runtime session gets its own localhost UDP port and session token, so multiple Godot projects can be active in one MCP server without cross-talk. Runtime tools accept the returned `sessionId` when routing needs to be explicit and enable:
 
 - **Screenshots:** Capture the viewport at any point during gameplay
 - **Input simulation:** Batched sequences of key presses, mouse clicks, mouse motion, UI element clicks by name or path, Godot action events, and timed waits
@@ -37,7 +37,7 @@ Each tool teaches agents how to use it through its description and response mess
 
 **Background mode.** Pass `background: true` to `run_project` and the Godot window moves off-screen with physical input blocked: borderless, unfocusable, mouse-passthrough. Programmatic input, screenshots, and all runtime tools work exactly the same. Useful for automated agent-driven testing where the window shouldn't be visible or interactive.
 
-**Manual attach mode.** When something other than MCP launches the game (a CI pipeline, an external debugger, your own shell), call `attach_project` first. It injects the bridge and marks the project active without spawning Godot, so when you launch the game manually, runtime tools work against it. The tradeoff: `get_debug_output` is unavailable in attached mode because stdout and stderr only flow through processes MCP started itself. Use `detach_project` when done.
+**Manual attach mode.** When something other than MCP launches the game (a CI pipeline, an external debugger, your own shell), call `attach_project` first. It injects the bridge, writes session metadata under `.mcp/bridge_config.json`, and marks the project active without spawning Godot, so when you launch the game manually, runtime tools work against it. The tradeoff: `get_debug_output` is unavailable in attached mode because stdout and stderr only flow through processes MCP started itself. Use `detach_project` when done.
 
 The bridge cleans itself up automatically when `stop_project` or `detach_project` is called. No leftover autoloads, no modified project files.
 
@@ -122,20 +122,21 @@ Ask your AI assistant to call `get_project_info`. If it returns a Godot version 
 
 ### Project Management
 
-| Tool               | Description                                                                            |
-| ------------------ | -------------------------------------------------------------------------------------- |
-| `launch_editor`    | Open the Godot editor GUI for a project                                                |
-| `run_project`      | Run a project and inject the MCP bridge. Pass `background: true` to hide the window    |
-| `attach_project`   | Inject the MCP bridge for a project you'll launch yourself                             |
-| `detach_project`   | Remove the injected bridge after manual-launch use, leaving the external process alone |
-| `stop_project`     | Stop the running project and remove the bridge (also detaches attached-mode state)     |
-| `get_debug_output` | Read stdout/stderr from an MCP-spawned project (unavailable in attached mode)          |
-| `list_projects`    | Find Godot projects in a directory                                                     |
-| `get_project_info` | Get project metadata and Godot version                                                 |
+| Tool                    | Description                                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------- |
+| `launch_editor`         | Open the Godot editor GUI for a project                                                |
+| `run_project`           | Run a project and inject the MCP bridge. Pass `background: true` to hide the window    |
+| `attach_project`        | Inject the MCP bridge for a project you'll launch yourself                             |
+| `detach_project`        | Remove the injected bridge after manual-launch use, leaving the external process alone |
+| `stop_project`          | Stop the running project and remove the bridge (also detaches attached-mode state)     |
+| `get_debug_output`      | Read stdout/stderr from an MCP-spawned project (unavailable in attached mode)          |
+| `list_runtime_sessions` | List active runtime sessions and their session IDs / bridge endpoints                  |
+| `list_projects`         | Find Godot projects in a directory                                                     |
+| `get_project_info`      | Get project metadata and Godot version                                                 |
 
 ### Runtime (requires `run_project` or `attach_project` first)
 
-After `run_project`, or after `attach_project` plus launching Godot manually, wait 2-3 seconds for the bridge to initialize before using these tools.
+After `run_project`, or after `attach_project` plus launching Godot manually, use the returned `sessionId` with runtime tools when more than one runtime session is active. If exactly one runtime session is active, the runtime tools can infer it.
 
 | Tool              | Description                                                      |
 | ----------------- | ---------------------------------------------------------------- |
@@ -226,9 +227,10 @@ When `run_project` or `attach_project` is called:
 
 1. `mcp_bridge.gd` is copied into the project directory
 2. It's registered as an autoload in `project.godot`
-3. Godot launches with the bridge listening on `127.0.0.1:9900`. With `run_project`, MCP spawns the process; with `attach_project`, you launch it yourself.
-4. Runtime tools send JSON commands to the bridge and await responses
-5. `stop_project` or `detach_project` removes the bridge script and autoload entry
+3. MCP allocates a localhost UDP port, generates a session token, and writes `.mcp/bridge_config.json` for attach-mode launches. With `run_project`, MCP also passes the port and token through the child-process environment.
+4. Godot launches with the bridge listening on the allocated `127.0.0.1:<port>` endpoint. With `run_project`, MCP spawns the process; with `attach_project`, you launch it yourself.
+5. Runtime tools send JSON commands to the selected session's bridge and include the session token as a guard.
+6. `stop_project` or `detach_project` removes the bridge script, bridge config, and autoload entry for that session's project.
 
 Files generated during runtime (screenshots, executed scripts) are stored in `.mcp/` inside the project directory. This directory is automatically added to `.gitignore` and has a `.gdignore` so Godot won't import it.
 

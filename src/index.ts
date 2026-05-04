@@ -30,7 +30,7 @@ export const allToolDefinitions = [
 export const serverInstructions = `Godot MCP Server — AI-driven Godot 4.x project manipulation.
 
 Tool categories:
-- Project management: launch_editor, run_project, attach_project, detach_project, stop_project, get_debug_output, list_projects, get_project_info
+- Project management: launch_editor, run_project, attach_project, detach_project, stop_project, get_debug_output, list_runtime_sessions, list_projects, get_project_info
 - Scene editing (headless): create_scene, add_node, load_sprite, save_scene, export_mesh_library, batch_scene_operations
 - Node editing (headless): delete_node, set_node_property, batch_set_node_properties, get_node_properties, batch_get_node_properties, attach_script, get_scene_tree, duplicate_node, get_node_signals, connect_signal, disconnect_signal
 - Runtime (requires run_project or attach_project): take_screenshot, simulate_input, get_ui_elements, run_script
@@ -41,8 +41,8 @@ Tool categories:
 Key behaviors:
 - All mutation operations (add_node, set_node_property, delete_node, etc.) save the scene automatically. Only use save_scene for save-as (newPath) or re-canonicalization.
 - Headless Godot initializes ALL registered autoloads. If any autoload is broken, headless operations will fail. Use list_autoloads / remove_autoload to diagnose.
-- run_project verifies bridge readiness before returning success. If it reports degraded status, retry runtime tools after a moment or check get_debug_output.
-- attach_project is the fallback path for a manually launched Godot process. It injects the bridge and marks the project active, but it does not spawn Godot or capture stdout/stderr.
+- run_project verifies bridge readiness before returning success and returns a sessionId plus bridge endpoint. If multiple runtime sessions are active, pass sessionId to runtime tools.
+- attach_project is the fallback path for a manually launched Godot process. It injects the bridge and returns a sessionId, but it does not spawn Godot or capture stdout/stderr.
 - click_element in simulate_input resolves by node path or node name (BFS search), NOT by visible text. Use get_ui_elements to discover valid element identifiers.
 - run_script expects GDScript with "extends RefCounted" and "func execute(scene_tree: SceneTree) -> Variant".
 - run_project spawns Godot without -d so runtime errors do not pause execution; the \`breakpoint\` keyword in user code is a no-op (no debugger is attached). SCRIPT ERROR output and GDScript backtraces still appear in stderr.`;
@@ -84,7 +84,7 @@ class GodotMcpServer {
 
   private async cleanup() {
     console.error('[SERVER] Cleaning up resources');
-    this.runner.stopProject();
+    this.runner.stopAllProjects();
     await this.server.close();
   }
 

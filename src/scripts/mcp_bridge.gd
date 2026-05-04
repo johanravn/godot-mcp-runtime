@@ -7,7 +7,7 @@ var session_token: String = ""
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	session_token = OS.get_environment("MCP_SESSION_TOKEN")
+	_load_bridge_config()
 	udp_server = UDPServer.new()
 	var err = udp_server.listen(port, "127.0.0.1")
 	if err != OK:
@@ -21,6 +21,38 @@ func _ready() -> void:
 		DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_BORDERLESS, true)
 		DisplayServer.window_set_position(Vector2i(-9999, -9999))
 		print("McpBridge: Background mode active - window hidden, physical input blocked")
+
+func _load_bridge_config() -> void:
+	var env_port := OS.get_environment("MCP_BRIDGE_PORT")
+	var env_token := OS.get_environment("MCP_SESSION_TOKEN")
+	if env_port.is_valid_int():
+		port = int(env_port)
+	if env_token != "":
+		session_token = env_token
+		return
+
+	var config_path := "res://.mcp/bridge_config.json"
+	if not FileAccess.file_exists(config_path):
+		return
+
+	var file := FileAccess.open(config_path, FileAccess.READ)
+	if file == null:
+		return
+	var data := file.get_as_text()
+	file.close()
+
+	var json := JSON.new()
+	if json.parse(data) != OK or typeof(json.data) != TYPE_DICTIONARY:
+		push_warning("McpBridge: Could not parse %s" % config_path)
+		return
+
+	var config: Dictionary = json.data
+	var configured_port = config.get("port", port)
+	if typeof(configured_port) == TYPE_INT or typeof(configured_port) == TYPE_FLOAT:
+		port = int(configured_port)
+	var configured_token = config.get("session_token", "")
+	if typeof(configured_token) == TYPE_STRING:
+		session_token = configured_token
 
 func _process(_delta: float) -> void:
 	udp_server.poll()
@@ -53,6 +85,11 @@ func _handle_json_command(peer: PacketPeerUDP, data: String) -> void:
 		_send_response(peer, {"error": "Expected JSON object"})
 		return
 
+	var expected_token = payload.get("session_token", "")
+	if expected_token != "" and session_token != "" and expected_token != session_token:
+		_send_response(peer, {"error": "Session token mismatch"})
+		return
+
 	var command = payload.get("command", "")
 	match command:
 		"input":
@@ -74,7 +111,7 @@ func _handle_json_command(peer: PacketPeerUDP, data: String) -> void:
 		"screenshot":
 			_handle_screenshot(peer)
 		"ping":
-			_send_response(peer, {"status": "pong", "session_token": session_token, "project_path": ProjectSettings.globalize_path("res://")})
+			_send_response(peer, {"status": "pong", "session_token": session_token, "project_path": ProjectSettings.globalize_path("res://"), "pid": OS.get_process_id(), "port": port})
 		_:
 			_send_response(peer, {"error": "Unknown command: %s" % command})
 

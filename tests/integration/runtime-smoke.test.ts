@@ -73,8 +73,8 @@ describe('runtime bridge smoke', () => {
       cpSync(fixtureProjectPath, tmpProject, { recursive: true });
 
       // Start the project — waitForBridge polls until the UDP ping responds
-      runner.runProject(tmpProject);
-      const bridgeResult = await runner.waitForBridge(12000);
+      const session = await runner.runProject(tmpProject);
+      const bridgeResult = await runner.waitForBridge(session.id, 12000);
 
       if (!bridgeResult.ready) {
         // Distinguish "no display server" (acceptable skip) from "process exited
@@ -90,7 +90,7 @@ describe('runtime bridge smoke', () => {
         );
       }
 
-      const response = await runner.sendCommand('screenshot', {}, 15000);
+      const response = await runner.sendCommand('screenshot', {}, 15000, session.id);
       const parsed = JSON.parse(response) as { path?: string; error?: string };
 
       if (parsed.error) {
