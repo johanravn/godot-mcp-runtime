@@ -116,6 +116,23 @@ function parseGodotErrorEntries(stderr: string): ParsedErrorEntry[] {
         }
       }
 
+      // Parse-error entries reference synthetic gdscript:// URIs in their `at:` line
+      // rather than a res:// path. Peek forward up to 3 lines for the secondary
+      // "Failed to load script/resource: \"res://...\"" message that names the file,
+      // and adopt that path so batch error attribution can find it.
+      if (!filePath && /Parse Error/i.test(line)) {
+        const lookaheadLimit = Math.min(i + 4, lines.length);
+        for (let j = i + 1; j < lookaheadLimit; j++) {
+          const failMatch = lines[j].match(
+            /Failed to load (?:script|resource):?\s*"?(res:\/\/[^":\s]+)/,
+          );
+          if (failMatch) {
+            filePath = failMatch[1];
+            break;
+          }
+        }
+      }
+
       entries.push({ message, line: lineNum, filePath });
       continue;
     }

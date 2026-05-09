@@ -155,6 +155,33 @@ describe('set_node_properties round-trip', () => {
     },
     40000,
   );
+
+  itGodot(
+    'reports success:false with an error naming the property when the property does not exist',
+    async () => {
+      // Regression: node.set() is void and silently no-ops on unknown keys, so the
+      // GDScript handler used to unconditionally write success:true. Now it checks
+      // `prop in node` first and surfaces an error for unknown properties.
+      const { stdout } = await runner.executeOperation(
+        'set_node_properties',
+        {
+          scenePath: 'main.tscn',
+          updates: [
+            { node_path: 'root/Label', property: 'nonexistent_property', value: 'whatever' },
+          ],
+        },
+        tmpProject,
+        30000,
+      );
+      const result = JSON.parse(extractJson(stdout));
+      const entry = result.results[0];
+      expect(entry.success).not.toBe(true);
+      expect(entry.error).toBeDefined();
+      expect(entry.error).toContain('nonexistent_property');
+      expect(entry.error.toLowerCase()).toContain('does not exist');
+    },
+    60000,
+  );
 });
 
 describe('delete_nodes round-trip', () => {

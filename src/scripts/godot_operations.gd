@@ -501,6 +501,8 @@ func set_node_properties(params: Dictionary) -> void:
 		var node = find_node_by_path(scene_root, update.node_path)
 		if node == null:
 			result["error"] = "Node not found: " + update.node_path
+		elif not (update.property in node):
+			result["error"] = "Property '%s' does not exist on node of type '%s'" % [update.property, node.get_class()]
 		else:
 			node.set(update.property, _coerce_property_value(update.value))
 			result["success"] = true

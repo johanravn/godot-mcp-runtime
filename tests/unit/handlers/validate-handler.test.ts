@@ -207,4 +207,42 @@ describe('handleValidate batch mode', () => {
     });
     expect(hasError(result)).toBe(true);
   });
+
+  it('reports valid:false for parse-broken targets via secondary "Failed to load script" message', async () => {
+    // Regression: parse-error stderr entries reference `gdscript://-N.gd` synthetic
+    // URIs in their `at:` line, not `res://` paths. The handler must peek forward
+    // for the secondary "Failed to load script: \"res://...\"" message to attribute
+    // the error back to the right target. Without that, batch fell back to the
+    // GDScript-side `resource != null` check, which is `true` for malformed scripts.
+    const fake = createFakeRunner({
+      stdout: JSON.stringify({
+        results: [
+          { target: '_e2e_test/broken.gd', valid: true, errors: [] },
+          { target: '_e2e_test/ok.gd', valid: true, errors: [] },
+        ],
+      }),
+      stderr: [
+        'SCRIPT ERROR: Parse Error: Unexpected token: ":".',
+        '   at: GDScript::reload (gdscript://-1.gd:2)',
+        'ERROR: Failed to load script "res://_e2e_test/broken.gd" with error "Parse error".',
+        '   at: load (core/io/resource_loader.cpp:283)',
+      ].join('\n'),
+    });
+
+    const result = await handleValidate(fake.asRunner, {
+      projectPath: fixtureProjectPath,
+      targets: [{ scriptPath: '_e2e_test/broken.gd' }, { scriptPath: '_e2e_test/ok.gd' }],
+    });
+    expect(hasError(result)).toBe(false);
+
+    const parsed = JSON.parse((result as { content: Array<{ text: string }> }).content[0].text);
+    const broken = parsed.results.find(
+      (r: { target: string }) => r.target === '_e2e_test/broken.gd',
+    );
+    const ok = parsed.results.find((r: { target: string }) => r.target === '_e2e_test/ok.gd');
+    expect(broken.valid).toBe(false);
+    expect(broken.errors.length).toBeGreaterThan(0);
+    expect(broken.errors[0].message).toContain('Unexpected token');
+    expect(ok.valid).toBe(true);
+  });
 });

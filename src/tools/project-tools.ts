@@ -135,6 +135,8 @@ export const projectToolDefinitions: ToolDefinition[] = [
 
 // --- Helpers ---
 
+const PROJECT_SCAN_BLACKLIST = new Set(['.git', '.godot', '.mcp', 'node_modules', '.svn', '.hg']);
+
 function findGodotProjects(
   directory: string,
   recursive: boolean,
@@ -152,7 +154,7 @@ function findGodotProjects(
 
     const entries = readdirSync(directory, { withFileTypes: true });
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      if (!entry.isDirectory() || PROJECT_SCAN_BLACKLIST.has(entry.name)) continue;
       const subdir = join(directory, entry.name);
       if (existsSync(projectGodotPath(subdir))) {
         projects.push({ path: subdir, name: entry.name });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import {
   handleGetProjectFiles,
@@ -372,5 +372,26 @@ describe('handleListProjects', () => {
     expect(hasError(result)).toBe(false);
     const text = (result as { content: Array<{ text: string }> }).content[0].text;
     expect(text).toContain(projectName);
+  });
+
+  it('descends into dot-prefixed project dirs that are not on the blacklist', async () => {
+    // Regression: an earlier blanket dot-prefix exclusion silently dropped
+    // legitimate projects whose directory name began with a dot. Only known
+    // noise dirs (.git, .godot, .mcp, node_modules, .svn, .hg) should be skipped.
+    const parent = makeTmpEmptyDir();
+    const dotProject = join(parent, '.dot-project');
+    mkdirSync(dotProject, { recursive: true });
+    writeFileSync(join(dotProject, 'project.godot'), 'config_version=5\n', 'utf8');
+
+    // Sibling .git dir is on the blacklist and must NOT be reported.
+    const gitDir = join(parent, '.git');
+    mkdirSync(gitDir, { recursive: true });
+    writeFileSync(join(gitDir, 'project.godot'), 'config_version=5\n', 'utf8');
+
+    const result = await handleListProjects({ directory: parent });
+    expect(hasError(result)).toBe(false);
+    const text = (result as { content: Array<{ text: string }> }).content[0].text;
+    expect(text).toContain('.dot-project');
+    expect(text).not.toContain('.git');
   });
 });
