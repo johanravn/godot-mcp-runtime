@@ -183,7 +183,7 @@ func _handle_screenshot(peer: PeerState, payload: Dictionary = {}) -> void:
 		_send_response(peer, {"error": "Failed to capture viewport image"})
 		return
 
-	var timestamp := "%s_%d" % [str(Time.get_unix_time_from_system()).replace(".", "_"), Time.get_ticks_msec()]
+	var timestamp := str(Time.get_unix_time_from_system()).replace(".", "_")
 	var screenshot_dir := ProjectSettings.globalize_path("res://.mcp/screenshots")
 	DirAccess.make_dir_recursive_absolute(screenshot_dir)
 	var file_path := screenshot_dir.path_join("screenshot_%s.png" % timestamp)

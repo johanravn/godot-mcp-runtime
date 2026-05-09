@@ -128,7 +128,7 @@ export const runtimeToolDefinitions: ToolDefinition[] = [
   {
     name: 'take_screenshot',
     description:
-      'Capture a PNG screenshot of the running Godot viewport. Use after simulate_input or run_script to verify visual changes. Requires an active runtime session (run_project or attach_project). responseMode defaults to full (current behavior: full inline PNG); preview saves the original and returns a bounded inline preview; path_only returns metadata only. Screenshots are saved under .mcp/screenshots. Errors if no session is active or the bridge does not respond within timeout (default 10000ms).',
+      'Capture a PNG of the running viewport. responseMode: preview (default — saves full PNG, returns bounded inline preview at 960x540), full (full inline PNG; use for small text or pixel-level inspection), path_only (saved-path only, no inline image). Saved under .mcp/screenshots. Returns: { responseMode, path, size, previewPath?, previewSize?, warnings? } as JSON text, plus an inline image for full/preview. Errors if no session or bridge times out (default 10000ms).',
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
@@ -141,7 +141,7 @@ export const runtimeToolDefinitions: ToolDefinition[] = [
           type: 'string',
           enum: ['full', 'preview', 'path_only'],
           description:
-            'Response payload mode. "full" returns the full inline PNG (default). "preview" returns a bounded preview inline plus paths. "path_only" returns paths only.',
+            'Response payload mode. "preview" returns a bounded inline preview plus paths (default). "full" returns the full inline PNG. "path_only" returns paths only.',
         },
         previewMaxWidth: {
           type: 'number',
@@ -160,7 +160,7 @@ export const runtimeToolDefinitions: ToolDefinition[] = [
   {
     name: 'simulate_input',
     description:
-      'Simulate batched sequential input in a running Godot project. Each action specifies its type ("key", "mouse_button", "mouse_motion", "click_element", "action", or "wait") plus per-type fields documented in inputSchema. For click_element, call get_ui_elements first to discover element node names and paths — element resolution is path/name only, not visible text. For text-entry into LineEdit/TextEdit, key actions auto-fill the InputEventKey.unicode field for ASCII letters and digits (respecting shift); for symbols or non-ASCII, pass the explicit "unicode" field. Press/release pairs require two separate actions; insert "wait" actions between them when the game needs frame ticks. Requires an active runtime session (run_project or attach_project). Returns { success, actions_processed, warnings? }. Errors if no session is active or any action fails parameter validation.',
+      "Simulate sequential input in a running project. Each action's `type` (key, mouse_button, mouse_motion, click_element, action, wait) gates which other fields apply — see per-property docs. For click_element use get_ui_elements first; resolution is by path/name, not visible text. Press/release require two actions; insert wait between for frame ticks. Returns: { success, actions_processed, warnings? }. Errors if no session or any action fails validation.",
     annotations: { destructiveHint: true },
     inputSchema: {
       type: 'object',
@@ -588,7 +588,7 @@ export async function handleStopProject(runner: GodotRunner) {
 }
 
 function parseScreenshotResponseMode(value: unknown): ScreenshotResponseMode | null {
-  if (value === undefined) return 'full';
+  if (value === undefined) return 'preview';
   if (typeof value !== 'string') return null;
   return SCREENSHOT_RESPONSE_MODES.includes(value as ScreenshotResponseMode)
     ? (value as ScreenshotResponseMode)
@@ -679,10 +679,8 @@ export async function handleTakeScreenshot(runner: GodotRunner, args: OperationP
     const metadata: Record<string, unknown> = {
       responseMode,
       path: parsed.path,
+      size: { width: parsed.width, height: parsed.height },
     };
-    if (typeof parsed.width === 'number' && typeof parsed.height === 'number') {
-      metadata.size = { width: parsed.width, height: parsed.height };
-    }
 
     const content: Array<{ type: string; [key: string]: unknown }> = [];
 
@@ -714,21 +712,14 @@ export async function handleTakeScreenshot(runner: GodotRunner, args: OperationP
         mimeType: 'image/png',
       });
       metadata.previewPath = parsed.preview_path;
-      if (typeof parsed.preview_width === 'number' && typeof parsed.preview_height === 'number') {
-        metadata.previewSize = { width: parsed.preview_width, height: parsed.preview_height };
-      }
+      metadata.previewSize = { width: parsed.preview_width, height: parsed.preview_height };
+    }
+
+    if (runtimeErrors.length > 0) {
+      metadata.warnings = runtimeErrors.slice(0, MAX_RUNTIME_ERROR_CONTEXT_LINES);
     }
 
     content.push({ type: 'text', text: JSON.stringify(metadata) });
-
-    if (runtimeErrors.length > 0) {
-      content.push({
-        type: 'text',
-        text: JSON.stringify({
-          warnings: runtimeErrors.slice(0, MAX_RUNTIME_ERROR_CONTEXT_LINES),
-        }),
-      });
-    }
 
     return { content };
   } catch (error: unknown) {

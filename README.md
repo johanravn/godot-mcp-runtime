@@ -30,7 +30,7 @@ Each tool teaches agents how to use it through its description and response mess
 
 **Runtime bridge.** When `run_project` or `attach_project` is called, the server injects `McpBridge` as an autoload. This opens a TCP listener on port 9900 (localhost only, override with `MCP_BRIDGE_PORT`) and enables:
 
-- **Screenshots:** Capture the viewport at any point during gameplay, with full, preview, or path-only responses
+- **Screenshots:** Capture the viewport — by default returns a 960x540 preview inline plus the full PNG on disk; use `responseMode: 'full'` for pixel-perfect or `'path_only'` to skip the inline image
 - **Input simulation:** Batched sequences of key presses, mouse clicks, mouse motion, UI element clicks by name or path, Godot action events, and timed waits
 - **UI discovery:** Walk the live scene tree and collect every visible Control node with its position, type, text content, and disabled state
 - **Live script execution:** Compile and run arbitrary GDScript with full SceneTree access while the game is running
@@ -161,27 +161,13 @@ When `run_project` or `attach_project` is called:
 
 Files generated during runtime (screenshots, executed scripts) are stored in `.mcp/` inside the project directory. This directory is automatically added to `.gitignore` and has a `.gdignore` so Godot won't import it.
 
-`take_screenshot` defaults to returning the full PNG inline for compatibility. Pass `responseMode: "preview"` to keep the full screenshot on disk while returning a smaller inline preview, or `responseMode: "path_only"` when the caller only needs the saved file path.
+`take_screenshot` defaults to `responseMode: "preview"` — the full PNG is saved to `.mcp/screenshots/` and a 960x540-bounded preview is returned inline. Override per call:
 
-Choose the smallest screenshot response that fits the task:
+- `responseMode: "full"` — return the full inline PNG when the agent needs to inspect exact pixels, small UI text, or texture detail.
+- `responseMode: "path_only"` — skip the inline image entirely when another tool or human will inspect the saved file.
+- `previewMaxWidth` / `previewMaxHeight` — override the default 960x540 preview bounds (e.g. `{ "responseMode": "preview", "previewMaxWidth": 480, "previewMaxHeight": 270 }`).
 
-- Use `responseMode: "preview"` for routine visual verification after input, scene changes, or live scripts. This keeps the original full-size PNG on disk and returns a 960x540-bounded preview inline by default.
-- Use `responseMode: "full"` when the agent needs to inspect exact pixels, small UI text, texture details, or other high-resolution evidence inline.
-- Use `responseMode: "path_only"` when another tool, script, or human will inspect the saved screenshot file and the MCP response only needs the path metadata.
-
-Examples:
-
-```json
-{ "responseMode": "preview" }
-```
-
-```json
-{ "responseMode": "preview", "previewMaxWidth": 480, "previewMaxHeight": 270 }
-```
-
-```json
-{ "responseMode": "path_only" }
-```
+The response is a JSON text entry (`{ responseMode, path, size, previewPath?, previewSize?, warnings? }`) plus an inline `image` entry for `full` and `preview`.
 
 ## Acknowledgments
 
